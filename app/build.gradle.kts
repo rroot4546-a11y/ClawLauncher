@@ -50,6 +50,11 @@ android {
     }
     packaging {
         resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+        // Force extract native libs so node binary is available on disk
+        jniLibs {
+            useLegacyPackaging = true
+            keepDebugSymbols += "**/libnode.so"
+        }
     }
 }
 
