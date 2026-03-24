@@ -36,11 +36,10 @@ class ProcessManager(private val context: Context, private val configManager: Co
     private val logBuffer = StringBuilder()
 
     private val baseDir: File get() = File(context.filesDir, "openclaw")
-    private val nodeDir: File get() = File(baseDir, "node")
-    private val nodeBin: File get() = File(nodeDir, "bin/node")
-    private val openclawBin: File get() = File(nodeDir, "bin/openclaw")
+    private val nodeBin: File get() = File(context.applicationInfo.nativeLibraryDir, "libnode.so")
+    private val openclawMain: File get() = File(baseDir, "node_modules/openclaw/bin/openclaw.js")
 
-    val isInstalled: Boolean get() = nodeBin.exists() && (openclawBin.exists() || File(nodeDir, "lib/node_modules/openclaw").exists())
+    val isInstalled: Boolean get() = nodeBin.exists() && openclawMain.exists()
 
     init {
         checkState()
@@ -58,7 +57,7 @@ class ProcessManager(private val context: Context, private val configManager: Co
         val config = configManager.config.value
         val env = mutableMapOf(
             "HOME" to baseDir.absolutePath,
-            "PATH" to "${nodeDir.absolutePath}/bin:/usr/local/bin:/usr/bin:/bin",
+            "PATH" to "${context.applicationInfo.nativeLibraryDir}:/system/bin:/system/xbin",
             "NODE_ENV" to "production",
             "TERM" to "xterm-256color",
             "npm_config_prefix" to nodeDir.absolutePath,
@@ -76,6 +75,10 @@ class ProcessManager(private val context: Context, private val configManager: Co
                 }
             }
         }
+
+        // Ensure TMPDIR exists
+        File(baseDir, "tmp").mkdirs()
+        env["TMPDIR"] = File(baseDir, "tmp").absolutePath
 
         return env
     }
@@ -98,16 +101,9 @@ class ProcessManager(private val context: Context, private val configManager: Co
                 val env = buildEnv()
                 val port = configManager.config.value.port
 
-                // Determine the openclaw command path
-                val clawCmd = if (openclawBin.exists()) {
-                    openclawBin.absolutePath
-                } else {
-                    File(nodeDir, "lib/node_modules/openclaw/bin/openclaw.js").absolutePath
-                }
-
                 val cmd = listOf(
                     nodeBin.absolutePath,
-                    clawCmd,
+                    openclawMain.absolutePath,
                     "gateway", "start", "--foreground"
                 )
 
@@ -253,8 +249,9 @@ class ProcessManager(private val context: Context, private val configManager: Co
             "State" to s.state.name,
             "Uptime" to uptimeStr,
             "Port" to s.port.toString(),
-            "Node.js" to if (nodeBin.exists()) "Installed" else "Not installed",
-            "OpenClaw" to if (isInstalled) "Installed" else "Not installed",
+            "Node.js" to if (nodeBin.exists()) "✓ (native lib)" else "Not found",
+            "Node Path" to nodeBin.absolutePath,
+            "OpenClaw" to if (openclawMain.exists()) "✓ Installed" else "Not installed",
             "Base Dir" to baseDir.absolutePath,
             "Workspace" to File(baseDir, "workspace").absolutePath,
             "Architecture" to (Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"),

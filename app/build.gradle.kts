@@ -77,8 +77,8 @@ dependencies {
     // OkHttp for downloading
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
-    // Archive extraction (tar.gz) - needed since Android has no tar command
-    implementation("org.apache.commons:commons-compress:1.26.0")
+    // Node.js binary is bundled as native lib (jniLibs/arm64-v8a/libnode.so)
+    // npm is bundled as assets/npm/ — extracted at setup time
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

@@ -7,9 +7,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.File
+import java.io.*
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 
 data class RestorePoint(
     val id: String = UUID.randomUUID().toString(),
@@ -70,26 +73,15 @@ class BackupManager(private val context: Context) {
         return withContext(Dispatchers.IO) {
             try {
                 val id = UUID.randomUUID().toString()
-                val backupFile = File(backupDir, "$id.tar.gz")
+                val backupFile = File(backupDir, "$id.zip")
 
-                // Create tar backup of openclaw directory
+                // Create zip backup of workspace + config
                 if (openclawDir.exists()) {
-                    val pb = ProcessBuilder(
-                        "tar", "czf", backupFile.absolutePath, "-C",
-                        openclawDir.parentFile!!.absolutePath, "openclaw"
-                    )
-                    pb.redirectErrorStream(true)
-                    val proc = pb.start()
-                    proc.waitFor()
+                    zipDirectory(openclawDir, backupFile, exclude = listOf("node_modules", "tmp", ".npm-cache"))
                 }
 
                 val sizeMb = if (backupFile.exists()) backupFile.length() / (1024.0 * 1024.0) else 0.0
-                val point = RestorePoint(
-                    id = id,
-                    name = name,
-                    description = description,
-                    sizeMb = sizeMb
-                )
+                val point = RestorePoint(id = id, name = name, description = description, sizeMb = sizeMb)
 
                 _restorePoints.value = _restorePoints.value + point
                 saveIndex()
@@ -103,20 +95,15 @@ class BackupManager(private val context: Context) {
     suspend fun rollback(id: String): Result<Unit> {
         return withContext(Dispatchers.IO) {
             try {
-                val backupFile = File(backupDir, "$id.tar.gz")
+                val backupFile = File(backupDir, "$id.zip")
                 if (!backupFile.exists()) return@withContext Result.failure(Exception("Backup not found"))
 
-                // Delete current openclaw dir
-                openclawDir.deleteRecursively()
+                // Delete current (except node_modules to save re-download)
+                val workspace = File(openclawDir, "workspace")
+                workspace.deleteRecursively()
 
                 // Extract backup
-                val pb = ProcessBuilder(
-                    "tar", "xzf", backupFile.absolutePath, "-C",
-                    openclawDir.parentFile!!.absolutePath
-                )
-                pb.redirectErrorStream(true)
-                val proc = pb.start()
-                proc.waitFor()
+                unzipFile(backupFile, openclawDir)
 
                 Result.success(Unit)
             } catch (e: Exception) {
@@ -127,9 +114,39 @@ class BackupManager(private val context: Context) {
 
     suspend fun deleteRestorePoint(id: String) {
         withContext(Dispatchers.IO) {
-            File(backupDir, "$id.tar.gz").delete()
+            File(backupDir, "$id.zip").delete()
             _restorePoints.value = _restorePoints.value.filter { it.id != id }
             saveIndex()
+        }
+    }
+
+    private fun zipDirectory(sourceDir: File, zipFile: File, exclude: List<String> = emptyList()) {
+        ZipOutputStream(BufferedOutputStream(FileOutputStream(zipFile))).use { zos ->
+            sourceDir.walkTopDown()
+                .filter { file -> exclude.none { ex -> file.absolutePath.contains("/$ex/") || file.name == ex } }
+                .filter { it.isFile }
+                .forEach { file ->
+                    val entryName = file.relativeTo(sourceDir).path
+                    zos.putNextEntry(ZipEntry(entryName))
+                    file.inputStream().use { it.copyTo(zos) }
+                    zos.closeEntry()
+                }
+        }
+    }
+
+    private fun unzipFile(zipFile: File, destDir: File) {
+        ZipInputStream(BufferedInputStream(FileInputStream(zipFile))).use { zis ->
+            var entry: ZipEntry?
+            while (zis.nextEntry.also { entry = it } != null) {
+                val outFile = File(destDir, entry!!.name)
+                if (!outFile.canonicalPath.startsWith(destDir.canonicalPath)) continue // path traversal guard
+                if (entry!!.isDirectory) {
+                    outFile.mkdirs()
+                } else {
+                    outFile.parentFile?.mkdirs()
+                    FileOutputStream(outFile).use { fos -> zis.copyTo(fos) }
+                }
+            }
         }
     }
 }

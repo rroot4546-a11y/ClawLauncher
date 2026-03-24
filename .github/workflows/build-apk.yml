@@ -17,6 +17,35 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Bundle Node.js binary as native library
+        run: |
+          NODE_VER=v20.18.1
+          
+          # Download arm64 (most Android phones)
+          wget -q "https://nodejs.org/dist/$NODE_VER/node-$NODE_VER-linux-arm64.tar.gz"
+          tar xzf "node-$NODE_VER-linux-arm64.tar.gz" "node-$NODE_VER-linux-arm64/bin/node"
+          mkdir -p app/src/main/jniLibs/arm64-v8a
+          cp "node-$NODE_VER-linux-arm64/bin/node" app/src/main/jniLibs/arm64-v8a/libnode.so
+          chmod 755 app/src/main/jniLibs/arm64-v8a/libnode.so
+          ls -la app/src/main/jniLibs/arm64-v8a/
+          
+          # Download x86_64 (emulators)
+          wget -q "https://nodejs.org/dist/$NODE_VER/node-$NODE_VER-linux-x64.tar.gz"
+          tar xzf "node-$NODE_VER-linux-x64.tar.gz" "node-$NODE_VER-linux-x64/bin/node"
+          mkdir -p app/src/main/jniLibs/x86_64
+          cp "node-$NODE_VER-linux-x64/bin/node" app/src/main/jniLibs/x86_64/libnode.so
+          chmod 755 app/src/main/jniLibs/x86_64/libnode.so
+          
+          # Bundle npm as asset (node needs it to install packages)
+          mkdir -p app/src/main/assets/npm
+          tar xzf "node-$NODE_VER-linux-arm64.tar.gz" --strip-components=1 -C /tmp "node-$NODE_VER-linux-arm64/lib"
+          cp -r /tmp/lib/node_modules/npm app/src/main/assets/npm/
+          
+          echo "Node binary sizes:"
+          ls -lh app/src/main/jniLibs/arm64-v8a/libnode.so
+          ls -lh app/src/main/jniLibs/x86_64/libnode.so
+          du -sh app/src/main/assets/npm/
+
       - name: Install Gradle wrapper
         run: |
           gradle wrapper --gradle-version 8.5
@@ -56,6 +85,8 @@ jobs:
             --v3-signing-enabled true \
             --out "$APK" "$ALIGNED"
           "$APKSIGNER" verify --verbose "$APK"
+          echo "APK size:"
+          ls -lh "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
