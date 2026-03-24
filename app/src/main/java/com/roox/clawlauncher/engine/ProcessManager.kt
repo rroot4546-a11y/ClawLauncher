@@ -1,11 +1,17 @@
 package com.roox.clawlauncher.engine
 
 import android.content.Context
+import android.content.Intent
+import android.os.Build
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
+import com.roox.clawlauncher.service.OpenClawService
+import java.io.BufferedReader
 import java.io.File
+import java.io.InputStreamReader
 
 enum class ServerState {
     STOPPED, STARTING, RUNNING, STOPPING, ERROR, NOT_INSTALLED
@@ -17,19 +23,24 @@ data class ServerStatus(
     val pid: Int? = null,
     val uptime: Long = 0L,
     val port: Int = 3000,
-    val version: String = "unknown"
+    val version: String = "unknown",
+    val logs: String = ""
 )
 
-class ProcessManager(private val context: Context) {
+class ProcessManager(private val context: Context, private val configManager: ConfigManager) {
     private val _status = MutableStateFlow(ServerStatus())
     val status: StateFlow<ServerStatus> = _status
 
     private var process: Process? = null
+    private var startTime: Long = 0L
+    private val logBuffer = StringBuilder()
+
     private val baseDir: File get() = File(context.filesDir, "openclaw")
     private val nodeDir: File get() = File(baseDir, "node")
     private val nodeBin: File get() = File(nodeDir, "bin/node")
+    private val openclawBin: File get() = File(nodeDir, "bin/openclaw")
 
-    val isInstalled: Boolean get() = nodeBin.exists()
+    val isInstalled: Boolean get() = nodeBin.exists() && (openclawBin.exists() || File(nodeDir, "lib/node_modules/openclaw").exists())
 
     init {
         checkState()
@@ -37,97 +48,228 @@ class ProcessManager(private val context: Context) {
 
     private fun checkState() {
         _status.value = if (isInstalled) {
-            ServerStatus(state = ServerState.STOPPED, message = "OpenClaw is ready")
+            ServerStatus(state = ServerState.STOPPED, message = "Ready to start")
         } else {
-            ServerStatus(state = ServerState.NOT_INSTALLED, message = "Setup required")
+            ServerStatus(state = ServerState.NOT_INSTALLED, message = "Run Setup first")
         }
+    }
+
+    private fun buildEnv(): Map<String, String> {
+        val config = configManager.config.value
+        val env = mutableMapOf(
+            "HOME" to baseDir.absolutePath,
+            "PATH" to "${nodeDir.absolutePath}/bin:/usr/local/bin:/usr/bin:/bin",
+            "NODE_ENV" to "production",
+            "TERM" to "xterm-256color",
+            "npm_config_prefix" to nodeDir.absolutePath,
+            "OPENCLAW_WORKSPACE" to File(baseDir, "workspace").absolutePath
+        )
+
+        // Load .env file if exists
+        val envFile = File(baseDir, ".env")
+        if (envFile.exists()) {
+            envFile.readLines().forEach { line ->
+                val trimmed = line.trim()
+                if (trimmed.isNotEmpty() && !trimmed.startsWith("#") && trimmed.contains("=")) {
+                    val (key, value) = trimmed.split("=", limit = 2)
+                    env[key.trim()] = value.trim()
+                }
+            }
+        }
+
+        return env
     }
 
     suspend fun start() {
         if (!isInstalled) {
-            _status.value = ServerStatus(state = ServerState.NOT_INSTALLED, message = "Please run Setup first")
+            _status.value = ServerStatus(state = ServerState.NOT_INSTALLED, message = "Run Setup first")
             return
         }
 
-        _status.value = ServerStatus(state = ServerState.STARTING, message = "Initializing OpenClaw...")
+        // Save config before starting
+        configManager.saveConfig()
+
+        _status.value = ServerStatus(state = ServerState.STARTING, message = "Starting OpenClaw gateway...")
+        logBuffer.clear()
+        appendLog("→ Starting OpenClaw gateway...")
 
         withContext(Dispatchers.IO) {
             try {
-                val env = arrayOf(
-                    "HOME=${baseDir.absolutePath}",
-                    "PATH=${nodeDir.absolutePath}/bin:${System.getenv("PATH")}",
-                    "NODE_ENV=production",
-                    "TERM=xterm-256color"
+                val env = buildEnv()
+                val port = configManager.config.value.port
+
+                // Determine the openclaw command path
+                val clawCmd = if (openclawBin.exists()) {
+                    openclawBin.absolutePath
+                } else {
+                    File(nodeDir, "lib/node_modules/openclaw/bin/openclaw.js").absolutePath
+                }
+
+                val cmd = listOf(
+                    nodeBin.absolutePath,
+                    clawCmd,
+                    "gateway", "start", "--foreground"
                 )
 
-                val pb = ProcessBuilder(
-                    nodeBin.absolutePath,
-                    File(baseDir, "node_modules/.bin/openclaw").absolutePath,
-                    "gateway", "start"
-                )
+                appendLog("→ Command: ${cmd.joinToString(" ")}")
+                appendLog("→ Port: $port")
+                appendLog("→ Home: ${baseDir.absolutePath}")
+
+                val pb = ProcessBuilder(cmd)
                 pb.directory(baseDir)
-                pb.environment().putAll(env.map {
-                    val parts = it.split("=", limit = 2)
-                    parts[0] to parts[1]
-                }.toMap())
+                pb.environment().clear()
+                pb.environment().putAll(env)
                 pb.redirectErrorStream(true)
 
                 process = pb.start()
+                startTime = System.currentTimeMillis()
 
-                // Wait a bit and check if it's still running
-                Thread.sleep(3000)
+                // Start reading output in background
+                val reader = BufferedReader(InputStreamReader(process!!.inputStream))
 
-                if (process?.isAlive == true) {
+                // Start foreground service
+                val serviceIntent = Intent(context, OpenClawService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(serviceIntent)
+                } else {
+                    context.startService(serviceIntent)
+                }
+
+                // Wait a bit and check if process is alive
+                var started = false
+                for (i in 1..30) { // Wait up to 15 seconds
+                    delay(500)
+
+                    // Read available output
+                    while (reader.ready()) {
+                        val line = reader.readLine() ?: break
+                        appendLog(line)
+                        if (line.contains("listening") || line.contains("started") || line.contains("ready") || line.contains("Gateway")) {
+                            started = true
+                        }
+                    }
+
+                    if (process?.isAlive != true) {
+                        val exit = process?.exitValue() ?: -1
+                        throw Exception("Process exited immediately (code: $exit)")
+                    }
+
+                    if (started || i >= 10) {
+                        started = true
+                        break
+                    }
+                }
+
+                if (started && process?.isAlive == true) {
+                    appendLog("✓ OpenClaw is running!")
                     _status.value = ServerStatus(
                         state = ServerState.RUNNING,
                         message = "OpenClaw is Live",
-                        pid = null,
-                        port = 3000
+                        port = port,
+                        uptime = 0,
+                        logs = logBuffer.toString()
                     )
+
+                    // Continue reading logs in background
+                    Thread {
+                        try {
+                            var line: String?
+                            while (reader.readLine().also { line = it } != null) {
+                                appendLog(line!!)
+                                _status.value = _status.value.copy(
+                                    logs = logBuffer.toString(),
+                                    uptime = (System.currentTimeMillis() - startTime) / 1000
+                                )
+                            }
+                        } catch (_: Exception) { }
+                        // Process ended
+                        _status.value = _status.value.copy(
+                            state = ServerState.STOPPED,
+                            message = "OpenClaw stopped"
+                        )
+                    }.start()
                 } else {
-                    val exitCode = process?.exitValue() ?: -1
-                    _status.value = ServerStatus(
-                        state = ServerState.ERROR,
-                        message = "Failed to start (exit code: $exitCode)"
-                    )
+                    throw Exception("Failed to start within timeout")
                 }
+
             } catch (e: Exception) {
+                appendLog("❌ Error: ${e.message}")
                 _status.value = ServerStatus(
                     state = ServerState.ERROR,
-                    message = "Error: ${e.message}"
+                    message = e.message ?: "Unknown error",
+                    logs = logBuffer.toString()
                 )
+                // Stop service
+                context.stopService(Intent(context, OpenClawService::class.java))
             }
         }
     }
 
     suspend fun stop() {
-        _status.value = _status.value.copy(state = ServerState.STOPPING, message = "Stopping OpenClaw...")
+        _status.value = _status.value.copy(state = ServerState.STOPPING, message = "Stopping...")
+        appendLog("→ Stopping OpenClaw...")
 
         withContext(Dispatchers.IO) {
             try {
                 process?.destroy()
-                process?.waitFor()
+                delay(2000)
+                if (process?.isAlive == true) {
+                    process?.destroyForcibly()
+                }
                 process = null
-                _status.value = ServerStatus(state = ServerState.STOPPED, message = "OpenClaw stopped")
+                appendLog("✓ Stopped")
+                _status.value = ServerStatus(
+                    state = ServerState.STOPPED,
+                    message = "Stopped",
+                    logs = logBuffer.toString()
+                )
+                // Stop foreground service
+                context.stopService(Intent(context, OpenClawService::class.java))
             } catch (e: Exception) {
-                _status.value = ServerStatus(state = ServerState.ERROR, message = "Stop error: ${e.message}")
+                appendLog("❌ Stop error: ${e.message}")
+                _status.value = ServerStatus(
+                    state = ServerState.ERROR,
+                    message = "Stop error: ${e.message}",
+                    logs = logBuffer.toString()
+                )
             }
         }
     }
 
     suspend fun restart() {
         stop()
+        delay(1000)
         start()
     }
 
     fun getStatusInfo(): Map<String, String> {
+        val s = _status.value
+        val uptimeStr = if (s.state == ServerState.RUNNING) {
+            val secs = (System.currentTimeMillis() - startTime) / 1000
+            "${secs / 3600}h ${(secs % 3600) / 60}m ${secs % 60}s"
+        } else "N/A"
+
         return mapOf(
-            "State" to _status.value.state.name,
-            "PID" to (_status.value.pid?.toString() ?: "N/A"),
-            "Port" to _status.value.port.toString(),
+            "State" to s.state.name,
+            "Uptime" to uptimeStr,
+            "Port" to s.port.toString(),
+            "Node.js" to if (nodeBin.exists()) "Installed" else "Not installed",
+            "OpenClaw" to if (isInstalled) "Installed" else "Not installed",
             "Base Dir" to baseDir.absolutePath,
-            "Node Installed" to isInstalled.toString(),
-            "Node Path" to nodeBin.absolutePath,
+            "Workspace" to File(baseDir, "workspace").absolutePath,
+            "Architecture" to (Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"),
         )
+    }
+
+    fun getLogs(): String = logBuffer.toString()
+
+    private fun appendLog(msg: String) {
+        logBuffer.appendLine(msg)
+        // Keep last 200 lines
+        val lines = logBuffer.lines()
+        if (lines.size > 200) {
+            logBuffer.clear()
+            logBuffer.append(lines.takeLast(200).joinToString("\n"))
+        }
     }
 }

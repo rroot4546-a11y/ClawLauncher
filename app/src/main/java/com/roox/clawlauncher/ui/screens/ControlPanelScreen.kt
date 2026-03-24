@@ -12,11 +12,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.roox.clawlauncher.engine.ServerState
@@ -31,6 +28,8 @@ fun ControlPanelScreen(
     onRestart: () -> Unit,
     onSetup: () -> Unit,
     onStatusInfo: () -> Unit,
+    onSettings: () -> Unit,
+    onLogs: () -> Unit,
     onGoToOpenClaw: () -> Unit,
     onReset: () -> Unit
 ) {
@@ -46,7 +45,6 @@ fun ControlPanelScreen(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Claw Logo
             Surface(
                 modifier = Modifier.size(48.dp),
                 shape = CircleShape,
@@ -64,70 +62,65 @@ fun ControlPanelScreen(
         }
 
         Spacer(modifier = Modifier.height(8.dp))
-
-        // Status indicator
         Text("Control Panel", fontSize = 14.sp, color = ClawTextSecondary)
         Spacer(modifier = Modifier.height(4.dp))
+
+        // Status
         StatusIndicator(status)
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
         // Main action button
-        MainActionButton(
-            status = status,
-            onStart = onStart,
-            onGoToOpenClaw = onGoToOpenClaw,
-            onSetup = onSetup
-        )
+        MainActionButton(status, onStart, onGoToOpenClaw, onSetup)
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
-        // Grid buttons (2x2)
+        // Grid 2x3
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            GridButton(
-                modifier = Modifier.weight(1f),
-                icon = Icons.Default.Settings,
-                label = "Setup",
-                onClick = onSetup
-            )
-            GridButton(
-                modifier = Modifier.weight(1f),
-                icon = Icons.Default.Info,
-                label = "Status",
-                onClick = onStatusInfo
-            )
+            GridButton(Modifier.weight(1f), Icons.Default.Download, "Setup", onSetup)
+            GridButton(Modifier.weight(1f), Icons.Default.Info, "Status", onStatusInfo)
+            GridButton(Modifier.weight(1f), Icons.Default.Settings, "Settings", onSettings)
         }
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             GridButton(
-                modifier = Modifier.weight(1f),
-                icon = Icons.Default.Refresh,
-                label = "Restart",
-                onClick = onRestart,
+                Modifier.weight(1f), Icons.Default.Refresh, "Restart", onRestart,
                 enabled = status.state == ServerState.RUNNING
             )
             GridButton(
-                modifier = Modifier.weight(1f),
-                icon = Icons.Default.Stop,
-                label = "Stop",
-                onClick = onStop,
+                Modifier.weight(1f), Icons.Default.Stop, "Stop", onStop,
                 enabled = status.state == ServerState.RUNNING || status.state == ServerState.STARTING
             )
+            GridButton(Modifier.weight(1f), Icons.Default.Terminal, "Logs", onLogs)
         }
 
         Spacer(modifier = Modifier.weight(1f))
 
-        // Reset button at bottom
-        TextButton(
-            onClick = onReset,
-            modifier = Modifier.fillMaxWidth()
-        ) {
+        // Config info at bottom
+        if (status.state == ServerState.RUNNING) {
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = ClawGreen.copy(alpha = 0.1f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier.size(8.dp).clip(CircleShape).background(ClawGreen)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text("Running on port ${status.port}", fontSize = 12.sp, color = ClawGreen)
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        TextButton(onClick = onReset, modifier = Modifier.fillMaxWidth()) {
             Icon(Icons.Default.Warning, contentDescription = null, tint = ClawRed, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(8.dp))
             Text("Reset This App", color = ClawRed)
@@ -141,18 +134,13 @@ fun StatusIndicator(status: ServerStatus) {
         ServerState.RUNNING -> ClawGreen to "OpenClaw is Live"
         ServerState.STARTING -> ClawYellow to "Starting..."
         ServerState.STOPPING -> ClawYellow to "Stopping..."
-        ServerState.STOPPED -> ClawRed to "OpenClaw Not Running"
-        ServerState.ERROR -> ClawRed to "Error: ${status.message}"
+        ServerState.STOPPED -> ClawRed to "Not Running"
+        ServerState.ERROR -> ClawRed to "Error"
         ServerState.NOT_INSTALLED -> ClawOrange to "Setup Required"
     }
 
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            modifier = Modifier
-                .size(10.dp)
-                .clip(CircleShape)
-                .background(dotColor)
-        )
+        Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(dotColor))
         Spacer(modifier = Modifier.width(8.dp))
         Text(text, fontSize = 14.sp, color = dotColor, fontWeight = FontWeight.Medium)
     }
@@ -185,13 +173,9 @@ fun MainActionButton(
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = ClawCardBgLight)
             ) {
-                CircularProgressIndicator(
-                    color = ClawTextPrimary,
-                    modifier = Modifier.size(22.dp),
-                    strokeWidth = 2.dp
-                )
+                CircularProgressIndicator(color = ClawTextPrimary, modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
                 Spacer(modifier = Modifier.width(12.dp))
-                Text("Initializing OpenClaw...", fontSize = 14.sp, color = ClawTextSecondary)
+                Text("Starting...", fontSize = 14.sp, color = ClawTextSecondary)
             }
         }
         ServerState.RUNNING -> {
@@ -232,7 +216,7 @@ fun GridButton(
 ) {
     Button(
         onClick = onClick,
-        modifier = modifier.height(72.dp),
+        modifier = modifier.height(68.dp),
         enabled = enabled,
         shape = RoundedCornerShape(14.dp),
         colors = ButtonDefaults.buttonColors(
@@ -244,12 +228,11 @@ fun GridButton(
             Icon(
                 icon, contentDescription = null,
                 tint = if (enabled) ClawTextPrimary else ClawTextSecondary.copy(alpha = 0.5f),
-                modifier = Modifier.size(24.dp)
+                modifier = Modifier.size(22.dp)
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                label,
-                fontSize = 12.sp,
+                label, fontSize = 11.sp,
                 color = if (enabled) ClawTextPrimary else ClawTextSecondary.copy(alpha = 0.5f)
             )
         }
