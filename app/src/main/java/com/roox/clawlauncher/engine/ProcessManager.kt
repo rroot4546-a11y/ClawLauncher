@@ -60,7 +60,7 @@ class ProcessManager(private val context: Context, private val configManager: Co
             "PATH" to "${context.applicationInfo.nativeLibraryDir}:/system/bin:/system/xbin",
             "NODE_ENV" to "production",
             "TERM" to "xterm-256color",
-            "npm_config_prefix" to nodeDir.absolutePath,
+            "npm_config_prefix" to baseDir.absolutePath,
             "OPENCLAW_WORKSPACE" to File(baseDir, "workspace").absolutePath
         )
 
