@@ -59,13 +59,7 @@ class MainActivity : ComponentActivity() {
                     TabRow(
                         selectedTabIndex = selectedTab,
                         containerColor = ClawDarkBg,
-                        contentColor = ClawTextPrimary,
-                        indicator = { tabPositions ->
-                            TabRowDefaults.SecondaryIndicator(
-                                modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
-                                color = ClawRed
-                            )
-                        }
+                        contentColor = ClawTextPrimary
                     ) {
                         Tab(
                             selected = selectedTab == 0,

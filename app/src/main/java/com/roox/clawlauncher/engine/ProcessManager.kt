@@ -81,7 +81,7 @@ class ProcessManager(private val context: Context) {
                     _status.value = ServerStatus(
                         state = ServerState.RUNNING,
                         message = "OpenClaw is Live",
-                        pid = try { process?.pid()?.toInt() } catch (_: Exception) { null },
+                        pid = null,
                         port = 3000
                     )
                 } else {
