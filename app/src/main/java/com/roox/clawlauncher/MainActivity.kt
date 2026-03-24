@@ -16,10 +16,11 @@ import com.roox.clawlauncher.engine.BackupManager
 import com.roox.clawlauncher.engine.BootstrapManager
 import com.roox.clawlauncher.engine.ConfigManager
 import com.roox.clawlauncher.engine.ProcessManager
-import com.roox.clawlauncher.engine.ServerState
 import com.roox.clawlauncher.ui.screens.*
 import com.roox.clawlauncher.ui.theme.*
+import com.roox.clawlauncher.util.PermissionHelper
 import kotlinx.coroutines.launch
+import java.io.File
 
 class MainActivity : ComponentActivity() {
     private lateinit var configManager: ConfigManager
@@ -35,6 +36,11 @@ class MainActivity : ComponentActivity() {
         bootstrapManager = BootstrapManager(this)
         backupManager = BackupManager(this)
 
+        // Request notification permission on start
+        if (!PermissionHelper.hasNotificationPermission(this)) {
+            PermissionHelper.requestNotificationPermission(this)
+        }
+
         setContent {
             ClawLauncherTheme {
                 MainApp()
@@ -42,11 +48,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Recompose when returning from permission settings
+    }
+
     @Composable
     fun MainApp() {
         val serverStatus by processManager.status.collectAsState()
         val setupProgress by bootstrapManager.progress.collectAsState()
         val restorePoints by backupManager.restorePoints.collectAsState()
+        var hasStoragePerm by remember { mutableStateOf(PermissionHelper.hasStoragePermission(this@MainActivity)) }
+
+        // Re-check permission on recomposition
+        LaunchedEffect(Unit) {
+            hasStoragePerm = PermissionHelper.hasStoragePermission(this@MainActivity)
+        }
 
         var currentScreen by remember { mutableStateOf("main") }
         var selectedTab by remember { mutableIntStateOf(0) }
@@ -63,30 +80,17 @@ class MainActivity : ComponentActivity() {
                         containerColor = ClawDarkBg,
                         contentColor = ClawTextPrimary
                     ) {
-                        Tab(
-                            selected = selectedTab == 0,
-                            onClick = { selectedTab = 0 },
-                            text = { Text("Control") }
-                        )
-                        Tab(
-                            selected = selectedTab == 1,
-                            onClick = { selectedTab = 1 },
-                            text = { Text("Toolkit") }
-                        )
+                        Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("Control") })
+                        Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("Toolkit") })
+                        Tab(selected = selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text("Files") })
                     }
 
                     when (selectedTab) {
                         0 -> ControlPanelScreen(
                             status = serverStatus,
-                            onStart = {
-                                lifecycleScope.launch { processManager.start() }
-                            },
-                            onStop = {
-                                lifecycleScope.launch { processManager.stop() }
-                            },
-                            onRestart = {
-                                lifecycleScope.launch { processManager.restart() }
-                            },
+                            onStart = { lifecycleScope.launch { processManager.start() } },
+                            onStop = { lifecycleScope.launch { processManager.stop() } },
+                            onRestart = { lifecycleScope.launch { processManager.restart() } },
                             onSetup = { currentScreen = "setup" },
                             onStatusInfo = { currentScreen = "status" },
                             onSettings = { currentScreen = "settings" },
@@ -94,32 +98,33 @@ class MainActivity : ComponentActivity() {
                             onGoToOpenClaw = {
                                 try {
                                     val port = serverStatus.port
-                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("http://localhost:$port"))
-                                    startActivity(intent)
+                                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("http://localhost:$port")))
                                 } catch (_: Exception) {
                                     Toast.makeText(this@MainActivity, "Cannot open browser", Toast.LENGTH_SHORT).show()
                                 }
                             },
                             onReset = {
-                                // Show confirmation
                                 lifecycleScope.launch {
                                     processManager.stop()
-                                    val baseDir = configManager.baseDir
-                                    baseDir.deleteRecursively()
-                                    baseDir.mkdirs()
+                                    configManager.baseDir.deleteRecursively()
+                                    configManager.baseDir.mkdirs()
                                     Toast.makeText(this@MainActivity, "App data reset. Restart the app.", Toast.LENGTH_LONG).show()
                                 }
                             }
                         )
                         1 -> ToolkitScreen(
-                            onSkillStore = {
-                                Toast.makeText(this@MainActivity, "Skill Store coming in v2.0", Toast.LENGTH_SHORT).show()
-                            },
-                            onSkillsManager = {
-                                Toast.makeText(this@MainActivity, "Skills Manager coming in v2.0", Toast.LENGTH_SHORT).show()
-                            },
+                            onSkillStore = { Toast.makeText(this@MainActivity, "Skill Store coming soon", Toast.LENGTH_SHORT).show() },
+                            onSkillsManager = { Toast.makeText(this@MainActivity, "Skills Manager coming soon", Toast.LENGTH_SHORT).show() },
                             onBackupRestore = { currentScreen = "backup" },
                             onSnapshotConfig = { currentScreen = "settings" }
+                        )
+                        2 -> FileManagerScreen(
+                            hasPermission = hasStoragePerm,
+                            onRequestPermission = {
+                                PermissionHelper.requestStoragePermission(this@MainActivity)
+                                // Will recheck on resume
+                            },
+                            onBack = { selectedTab = 0 }
                         )
                     }
                 }
@@ -156,9 +161,7 @@ class MainActivity : ComponentActivity() {
                 restorePoints = restorePoints,
                 onBack = { currentScreen = "main" },
                 onCreateBackup = { name, desc ->
-                    lifecycleScope.launch {
-                        backupManager.createRestorePoint(name, desc)
-                    }
+                    lifecycleScope.launch { backupManager.createRestorePoint(name, desc) }
                 },
                 onRollback = { id ->
                     lifecycleScope.launch {
@@ -167,9 +170,7 @@ class MainActivity : ComponentActivity() {
                     }
                 },
                 onDelete = { id ->
-                    lifecycleScope.launch {
-                        backupManager.deleteRestorePoint(id)
-                    }
+                    lifecycleScope.launch { backupManager.deleteRestorePoint(id) }
                 }
             )
         }
