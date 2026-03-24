@@ -104,7 +104,7 @@ class MainActivity : ComponentActivity() {
                                 // Show confirmation
                                 lifecycleScope.launch {
                                     processManager.stop()
-                                    val baseDir = configManager.getBaseDir()
+                                    val baseDir = configManager.baseDir
                                     baseDir.deleteRecursively()
                                     baseDir.mkdirs()
                                     Toast.makeText(this@MainActivity, "App data reset. Restart the app.", Toast.LENGTH_LONG).show()

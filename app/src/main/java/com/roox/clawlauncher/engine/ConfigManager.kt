@@ -31,9 +31,9 @@ class ConfigManager(private val context: Context) {
     private val _config = MutableStateFlow(ClawConfig())
     val config: StateFlow<ClawConfig> = _config
 
-    private val baseDir: File get() = File(context.filesDir, "openclaw")
-    private val workspaceDir: File get() = File(baseDir, "workspace")
-    private val configFile: File get() = File(baseDir, "openclaw.json")
+    val baseDir: File get() = File(context.filesDir, "openclaw")
+    val workspaceDir: File get() = File(baseDir, "workspace")
+    val configFile: File get() = File(baseDir, "openclaw.json")
     private val envFile: File get() = File(baseDir, ".env")
 
     init {
@@ -143,9 +143,7 @@ class ConfigManager(private val context: Context) {
         }
     }
 
-    fun getConfigFile(): File = configFile
-    fun getBaseDir(): File = baseDir
-    fun getWorkspaceDir(): File = workspaceDir
+    // Access via public properties: baseDir, workspaceDir, configFile
 
     fun getAvailableModels(): Map<String, List<Pair<String, String>>> {
         return mapOf(
