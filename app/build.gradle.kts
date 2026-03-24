@@ -77,5 +77,8 @@ dependencies {
     // OkHttp for downloading
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
+    // Archive extraction (tar.gz) - needed since Android has no tar command
+    implementation("org.apache.commons:commons-compress:1.26.0")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

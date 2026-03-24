@@ -8,11 +8,15 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import java.io.BufferedReader
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStreamReader
 import java.util.concurrent.TimeUnit
+import java.util.zip.GZIPInputStream
 
 data class SetupProgress(
     val isRunning: Boolean = false,
@@ -40,7 +44,7 @@ class BootstrapManager(private val context: Context) {
         .followRedirects(true)
         .build()
 
-    // Node.js LTS for Android
+    // Use tar.gz (not tar.xz) since we extract via Java GZIPInputStream
     private val nodeVersion = "v20.18.1"
 
     val isNodeInstalled: Boolean get() = nodeBin.exists() && nodeBin.canExecute()
@@ -62,22 +66,22 @@ class BootstrapManager(private val context: Context) {
 
         withContext(Dispatchers.IO) {
             try {
-                // Create base dirs
                 baseDir.mkdirs()
                 nodeDir.mkdirs()
                 File(baseDir, "workspace").mkdirs()
 
-                // Step 1: Download Node.js if not installed
+                // Step 1: Download Node.js
                 if (!isNodeInstalled) {
                     _progress.value = _progress.value.copy(
                         step = "Downloading Node.js $nodeVersion ($arch)...",
                         progress = 0.05f
                     )
                     log("→ Architecture: $arch")
-                    log("→ Downloading Node.js $nodeVersion...")
+                    log("→ Downloading Node.js $nodeVersion (tar.gz)...")
 
-                    val nodeUrl = "https://nodejs.org/dist/$nodeVersion/node-$nodeVersion-linux-$arch.tar.xz"
-                    val nodeTar = File(baseDir, "node-download.tar.xz")
+                    // Use .tar.gz format (Java can decompress gzip natively)
+                    val nodeUrl = "https://nodejs.org/dist/$nodeVersion/node-$nodeVersion-linux-$arch.tar.gz"
+                    val nodeTar = File(baseDir, "node-download.tar.gz")
 
                     downloadFile(nodeUrl, nodeTar) { downloaded, total ->
                         val mb = downloaded / (1024.0 * 1024.0)
@@ -90,57 +94,62 @@ class BootstrapManager(private val context: Context) {
                     }
                     log("✓ Download complete: ${nodeTar.length() / (1024 * 1024)} MB")
 
-                    // Step 2: Extract
+                    // Step 2: Extract using Java (no system tar needed!)
                     _progress.value = _progress.value.copy(
                         step = "Extracting Node.js...",
                         progress = 0.42f
                     )
-                    log("→ Extracting Node.js...")
+                    log("→ Extracting Node.js (Java-based)...")
 
-                    val exitCode = runCommand(
-                        "tar", "xf", nodeTar.absolutePath,
-                        "--strip-components=1",
-                        "-C", nodeDir.absolutePath
-                    )
-
-                    if (exitCode != 0) {
-                        throw Exception("Failed to extract Node.js (exit: $exitCode)")
+                    extractTarGz(nodeTar, nodeDir, stripComponents = 1) { extracted ->
+                        if (extracted % 100 == 0) {
+                            _progress.value = _progress.value.copy(
+                                step = "Extracting... ($extracted files)",
+                                progress = 0.42f + (minOf(extracted, 500).toFloat() / 500f * 0.13f)
+                            )
+                        }
                     }
 
                     // Make binaries executable
-                    nodeBin.setExecutable(true)
-                    npmBin.setExecutable(true)
-                    npxBin.setExecutable(true)
+                    val binDir = File(nodeDir, "bin")
+                    binDir.listFiles()?.forEach { it.setExecutable(true, false) }
+                    nodeBin.setExecutable(true, false)
 
                     nodeTar.delete()
                     log("✓ Node.js extracted")
 
-                    // Verify
+                    // Verify node works
                     val nodeVer = runCommandOutput(nodeBin.absolutePath, "--version")
                     log("✓ Node.js version: $nodeVer")
+
+                    if (nodeVer.isBlank() || !nodeVer.startsWith("v")) {
+                        throw Exception("Node.js verification failed. Output: $nodeVer")
+                    }
                 } else {
                     log("✓ Node.js already installed")
-                    _progress.value = _progress.value.copy(progress = 0.42f)
+                    _progress.value = _progress.value.copy(progress = 0.55f)
                 }
 
                 // Step 3: Install OpenClaw via npm
                 if (!isOpenClawInstalled) {
                     _progress.value = _progress.value.copy(
-                        step = "Installing OpenClaw (this may take a few minutes)...",
-                        progress = 0.50f
+                        step = "Installing OpenClaw (this takes a few minutes)...",
+                        progress = 0.58f
                     )
                     log("→ Installing openclaw via npm...")
 
                     val env = buildEnv()
                     val installExit = runCommandWithEnv(
-                        env,
+                        env, baseDir,
                         nodeBin.absolutePath, npmBin.absolutePath,
-                        "install", "-g", "openclaw", "--no-optional"
+                        "install", "-g", "openclaw", "--no-optional", "--no-audit", "--no-fund"
                     ) { line ->
-                        log("  npm: $line")
-                        // Update progress based on npm output
+                        log("  $line")
                         if (line.contains("added")) {
-                            _progress.value = _progress.value.copy(progress = 0.85f)
+                            _progress.value = _progress.value.copy(
+                                step = "Installing OpenClaw... (finalizing)",
+                                progress = 0.88f
+                            )
                         }
                     }
 
@@ -148,11 +157,12 @@ class BootstrapManager(private val context: Context) {
                         throw Exception("npm install openclaw failed (exit: $installExit)")
                     }
 
-                    log("✓ OpenClaw installed")
+                    // Make openclaw bin executable
+                    if (openclawBin.exists()) {
+                        openclawBin.setExecutable(true, false)
+                    }
 
-                    // Verify
-                    val clawVer = runCommandOutputWithEnv(env, nodeBin.absolutePath, openclawBin.absolutePath, "--version")
-                    log("✓ OpenClaw version: $clawVer")
+                    log("✓ OpenClaw installed")
                 } else {
                     log("✓ OpenClaw already installed")
                 }
@@ -160,26 +170,15 @@ class BootstrapManager(private val context: Context) {
                 // Step 4: Initialize workspace
                 _progress.value = _progress.value.copy(
                     step = "Setting up workspace...",
-                    progress = 0.90f
+                    progress = 0.92f
                 )
                 log("→ Initializing workspace...")
 
                 val workspaceDir = File(baseDir, "workspace")
                 workspaceDir.mkdirs()
 
-                // Create essential workspace files
-                createFileIfMissing(File(workspaceDir, "AGENTS.md"), """
-                    |# AGENTS.md
-                    |
-                    |This is your OpenClaw workspace on Android.
-                """.trimMargin())
-
-                createFileIfMissing(File(workspaceDir, "SOUL.md"), """
-                    |# SOUL.md
-                    |
-                    |You are a helpful AI assistant running on an Android device via ClawLauncher.
-                    |Be concise, helpful, and friendly.
-                """.trimMargin())
+                createFileIfMissing(File(workspaceDir, "AGENTS.md"), "# AGENTS.md\n\nYour OpenClaw workspace on Android.\n")
+                createFileIfMissing(File(workspaceDir, "SOUL.md"), "# SOUL.md\n\nYou are a helpful AI assistant running on Android via ClawLauncher.\n")
 
                 log("✓ Workspace ready")
 
@@ -189,7 +188,7 @@ class BootstrapManager(private val context: Context) {
                     step = "Setup complete! 🦀",
                     progress = 1f,
                     isComplete = true,
-                    log = _progress.value.log + "✅ All done! Ready to start OpenClaw.\n"
+                    log = _progress.value.log + "✅ All done! Go back and start OpenClaw.\n"
                 )
 
             } catch (e: Exception) {
@@ -210,18 +209,16 @@ class BootstrapManager(private val context: Context) {
                 val env = buildEnv()
                 log("→ Updating openclaw to latest...")
                 val exitCode = runCommandWithEnv(
-                    env,
+                    env, baseDir,
                     nodeBin.absolutePath, npmBin.absolutePath,
                     "update", "-g", "openclaw"
-                ) { line -> log("  npm: $line") }
+                ) { line -> log("  $line") }
 
                 if (exitCode != 0) throw Exception("Update failed (exit: $exitCode)")
-
-                val ver = runCommandOutputWithEnv(env, nodeBin.absolutePath, openclawBin.absolutePath, "--version")
-                log("✓ Updated to: $ver")
+                log("✓ Update complete")
 
                 _progress.value = SetupProgress(
-                    isRunning = false, step = "Updated to $ver", progress = 1f,
+                    isRunning = false, step = "Updated!", progress = 1f,
                     isComplete = true, log = _progress.value.log
                 )
             } catch (e: Exception) {
@@ -231,12 +228,56 @@ class BootstrapManager(private val context: Context) {
         }
     }
 
+    // =========================================
+    // Pure Java tar.gz extraction (no system commands!)
+    // =========================================
+    private fun extractTarGz(tarGzFile: File, destDir: File, stripComponents: Int = 0, onFile: (Int) -> Unit = {}) {
+        var count = 0
+        FileInputStream(tarGzFile).use { fis ->
+            GZIPInputStream(fis).use { gzis ->
+                TarArchiveInputStream(gzis).use { tarIn ->
+                    var entry: TarArchiveEntry?
+                    while (tarIn.nextEntry.also { entry = it } != null) {
+                        val e = entry ?: continue
+                        // Strip leading path components
+                        val parts = e.name.split("/").drop(stripComponents)
+                        if (parts.isEmpty()) continue
+                        val relativePath = parts.joinToString("/")
+                        if (relativePath.isBlank()) continue
+
+                        val outFile = File(destDir, relativePath)
+
+                        // Security: prevent path traversal
+                        if (!outFile.canonicalPath.startsWith(destDir.canonicalPath)) continue
+
+                        if (e.isDirectory) {
+                            outFile.mkdirs()
+                        } else {
+                            outFile.parentFile?.mkdirs()
+                            FileOutputStream(outFile).use { fos ->
+                                tarIn.copyTo(fos)
+                            }
+                            // Preserve executable permission
+                            if (e.mode and 0b001001001 != 0) { // any execute bit
+                                outFile.setExecutable(true, false)
+                            }
+                        }
+                        count++
+                        onFile(count)
+                    }
+                }
+            }
+        }
+        log("✓ Extracted $count files")
+    }
+
     private fun buildEnv(): Map<String, String> = mapOf(
         "HOME" to baseDir.absolutePath,
-        "PATH" to "${nodeDir.absolutePath}/bin:/usr/local/bin:/usr/bin:/bin",
+        "PATH" to "${nodeDir.absolutePath}/bin:/system/bin:/system/xbin",
         "NODE_ENV" to "production",
         "TERM" to "xterm-256color",
-        "npm_config_prefix" to nodeDir.absolutePath
+        "npm_config_prefix" to nodeDir.absolutePath,
+        "TMPDIR" to File(baseDir, "tmp").apply { mkdirs() }.absolutePath
     )
 
     private fun downloadFile(url: String, dest: File, onProgress: (Long, Long) -> Unit) {
@@ -260,26 +301,23 @@ class BootstrapManager(private val context: Context) {
         }
     }
 
-    private fun runCommand(vararg cmd: String): Int {
-        val pb = ProcessBuilder(*cmd)
-        pb.redirectErrorStream(true)
-        val proc = pb.start()
-        proc.inputStream.bufferedReader().readLines() // consume output
-        return proc.waitFor()
-    }
-
     private fun runCommandOutput(vararg cmd: String): String {
-        val pb = ProcessBuilder(*cmd)
-        pb.redirectErrorStream(true)
-        val proc = pb.start()
-        val output = proc.inputStream.bufferedReader().readText().trim()
-        proc.waitFor()
-        return output
+        return try {
+            val pb = ProcessBuilder(*cmd)
+            pb.redirectErrorStream(true)
+            val proc = pb.start()
+            val output = proc.inputStream.bufferedReader().readText().trim()
+            proc.waitFor(30, TimeUnit.SECONDS)
+            output
+        } catch (e: Exception) {
+            "Error: ${e.message}"
+        }
     }
 
-    private fun runCommandWithEnv(env: Map<String, String>, vararg cmd: String, onLine: (String) -> Unit = {}): Int {
+    private fun runCommandWithEnv(env: Map<String, String>, workDir: File, vararg cmd: String, onLine: (String) -> Unit = {}): Int {
         val pb = ProcessBuilder(*cmd)
-        pb.directory(baseDir)
+        pb.directory(workDir)
+        pb.environment().clear()
         pb.environment().putAll(env)
         pb.redirectErrorStream(true)
         val proc = pb.start()
@@ -290,17 +328,6 @@ class BootstrapManager(private val context: Context) {
             onLine(line!!)
         }
         return proc.waitFor()
-    }
-
-    private fun runCommandOutputWithEnv(env: Map<String, String>, vararg cmd: String): String {
-        val pb = ProcessBuilder(*cmd)
-        pb.directory(baseDir)
-        pb.environment().putAll(env)
-        pb.redirectErrorStream(true)
-        val proc = pb.start()
-        val output = proc.inputStream.bufferedReader().readText().trim()
-        proc.waitFor()
-        return output
     }
 
     private fun createFileIfMissing(file: File, content: String) {
