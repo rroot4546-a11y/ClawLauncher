@@ -72,13 +72,15 @@ class BootstrapManager(private val context: Context) {
                     throw Exception("Node.js (libnode.so) not found in native libs. Reinstall the APK.")
                 }
 
-                // List all native libs
-                val nativeDir = File(nativeLibDir)
-                log("-> Native libs: ${nativeDir.listFiles()?.joinToString { it.name } ?: "none"}")
-
                 // List native libs available
                 val nativeFiles = File(nativeLibDir).listFiles()?.map { it.name }?.sorted() ?: emptyList()
                 log("-> Native libs (${nativeFiles.size}): ${nativeFiles.joinToString()}")
+
+                // Create bin/ directory with symlinks so "node" and "npm" are in PATH
+                val binDir = File(baseDir, "bin")
+                binDir.mkdirs()
+                createSymlink(nodeBin, File(binDir, "node"))
+                log("-> Created bin/node → ${nodeBin.absolutePath}")
 
                 // Test node execution
                 log("-> Testing node --version...")
@@ -102,6 +104,14 @@ class BootstrapManager(private val context: Context) {
                     log("-> Extracting npm from npm.zip...")
                     npmDir.mkdirs()
                     extractZipAsset("npm.zip", npmDir)
+                    // Create bin/npm symlink
+                    val npmBinScript = File(npmDir, "bin/npm-cli.js")
+                    if (npmBinScript.exists()) {
+                        val npmWrapper = File(binDir, "npm")
+                        npmWrapper.writeText("#!/system/bin/sh\nexec \"${nodeBin.absolutePath}\" \"${npmBinScript.absolutePath}\" \"$@\"\n")
+                        npmWrapper.setExecutable(true, false)
+                        log("-> Created bin/npm wrapper")
+                    }
                     log("OK npm extracted (${npmDir.listFiles()?.size ?: 0} top-level items)")
                 } else {
                     log("OK npm already installed")
@@ -125,7 +135,8 @@ class BootstrapManager(private val context: Context) {
                         nodeBin.absolutePath, npmCli.absolutePath,
                         "install", "openclaw",
                         "--prefix", baseDir.absolutePath,
-                        "--no-optional", "--no-audit", "--no-fund"
+                        "--no-optional", "--no-audit", "--no-fund",
+                        "--ignore-scripts"
                     ) { line ->
                         log("  $line")
                         if (line.contains("added")) {
@@ -217,17 +228,20 @@ class BootstrapManager(private val context: Context) {
         log("-> Extracted $count files from $assetName")
     }
 
-    // Environment: LD_LIBRARY_PATH points to nativeLibraryDir where all .so files live
-    fun buildEnv(): Map<String, String> = mapOf(
-        "HOME" to baseDir.absolutePath,
-        "PATH" to "$nativeLibDir:/system/bin:/system/xbin",
-        "LD_LIBRARY_PATH" to nativeLibDir,
-        "NODE_ENV" to "production",
-        "TERM" to "xterm-256color",
-        "TMPDIR" to File(baseDir, "tmp").apply { mkdirs() }.absolutePath,
-        "npm_config_cache" to File(baseDir, ".npm-cache").apply { mkdirs() }.absolutePath,
-        "npm_config_prefix" to baseDir.absolutePath
-    )
+    // Environment: bin/ has node+npm symlinks, nativeLibraryDir has the actual binaries
+    fun buildEnv(): Map<String, String> {
+        val binDir = File(baseDir, "bin").absolutePath
+        return mapOf(
+            "HOME" to baseDir.absolutePath,
+            "PATH" to "$binDir:$nativeLibDir:/system/bin:/system/xbin",
+            "LD_LIBRARY_PATH" to nativeLibDir,
+            "NODE_ENV" to "production",
+            "TERM" to "xterm-256color",
+            "TMPDIR" to File(baseDir, "tmp").apply { mkdirs() }.absolutePath,
+            "npm_config_cache" to File(baseDir, ".npm-cache").apply { mkdirs() }.absolutePath,
+            "npm_config_prefix" to baseDir.absolutePath
+        )
+    }
 
     private fun runCmdOutput(env: Map<String, String>, vararg cmd: String): String {
         return try {
@@ -254,6 +268,24 @@ class BootstrapManager(private val context: Context) {
         var line: String?
         while (reader.readLine().also { line = it } != null) { onLine(line!!) }
         return proc.waitFor()
+    }
+
+    private fun createSymlink(target: File, link: File) {
+        try {
+            if (link.exists()) link.delete()
+            // Try OS symlink
+            Runtime.getRuntime().exec(arrayOf("ln", "-sf", target.absolutePath, link.absolutePath)).waitFor()
+            if (!link.exists()) {
+                // Fallback: create a shell wrapper
+                link.writeText("#!/system/bin/sh\nexec \"${target.absolutePath}\" \"$@\"\n")
+                link.setExecutable(true, false)
+            }
+        } catch (_: Exception) {
+            // Last resort: shell wrapper
+            link.parentFile?.mkdirs()
+            link.writeText("#!/system/bin/sh\nexec \"${target.absolutePath}\" \"$@\"\n")
+            link.setExecutable(true, false)
+        }
     }
 
     private fun mkfile(f: File, content: String) {
