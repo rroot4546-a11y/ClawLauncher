@@ -75,6 +75,12 @@ class BootstrapManager(private val context: Context) {
                 val nativeDir = File(nativeLibDir)
                 log("-> Native libs: ${nativeDir.listFiles()?.joinToString { it.name } ?: "none"}")
 
+                // Prepare library directory with correct versioned names
+                log("-> Preparing Termux libraries...")
+                val termuxLibDir = NativeLibHelper.prepareLibs(context)
+                log("-> Termux lib dir: ${termuxLibDir.absolutePath}")
+                log("-> Libs: ${termuxLibDir.listFiles()?.joinToString { it.name } ?: "none"}")
+
                 // Test node execution
                 log("-> Testing node --version...")
                 val env = buildEnv()
@@ -203,11 +209,11 @@ class BootstrapManager(private val context: Context) {
         log("-> Extracted $count files")
     }
 
-    // Environment: LD_LIBRARY_PATH points to nativeLibraryDir for shared libs
+    // Environment: LD_LIBRARY_PATH points to termux-lib (versioned names) + nativeLibraryDir
     fun buildEnv(): Map<String, String> = mapOf(
         "HOME" to baseDir.absolutePath,
         "PATH" to "$nativeLibDir:/system/bin:/system/xbin",
-        "LD_LIBRARY_PATH" to nativeLibDir,
+        "LD_LIBRARY_PATH" to NativeLibHelper.getLibPath(context),
         "NODE_ENV" to "production",
         "TERM" to "xterm-256color",
         "TMPDIR" to File(baseDir, "tmp").apply { mkdirs() }.absolutePath,
