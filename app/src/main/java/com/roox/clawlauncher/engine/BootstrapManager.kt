@@ -128,6 +128,21 @@ class BootstrapManager(private val context: Context) {
                         step = "Installing OpenClaw (few minutes)...",
                         progress = 0.45f
                     )
+                    
+                    // Clean npm cache to prevent ENOTEMPTY errors
+                    log("-> Cleaning npm cache...")
+                    val cacheDir = File(baseDir, ".npm-cache")
+                    if (cacheDir.exists()) {
+                        cacheDir.deleteRecursively()
+                        cacheDir.mkdirs()
+                    }
+                    // Clean old node_modules if partial install
+                    val oldModules = File(baseDir, "node_modules")
+                    if (oldModules.exists() && !isOpenClawInstalled) {
+                        log("-> Cleaning old node_modules...")
+                        oldModules.deleteRecursively()
+                    }
+                    
                     log("-> npm install openclaw...")
 
                     val exit = runCmdLines(
@@ -136,7 +151,7 @@ class BootstrapManager(private val context: Context) {
                         "install", "openclaw",
                         "--prefix", baseDir.absolutePath,
                         "--no-optional", "--no-audit", "--no-fund",
-                        "--ignore-scripts"
+                        "--ignore-scripts", "--force"
                     ) { line ->
                         log("  $line")
                         if (line.contains("added")) {
