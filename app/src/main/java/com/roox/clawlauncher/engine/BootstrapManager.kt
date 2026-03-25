@@ -95,16 +95,15 @@ class BootstrapManager(private val context: Context) {
         return findDirWithFile(baseDir, "openclaw", "package.json", 6)
     }
 
-    // Find the entry point JS file
+    // Find the CLI entry point (openclaw.mjs is the CLI, dist/index.js is the library)
     private fun findOpenclawEntry(): File? {
         val dir = findOpenclawDir() ?: return null
-        // Check all possible entry points
+        // CLI entry point MUST be openclaw.mjs (the bin entry)
+        // dist/index.js is the library main, NOT the CLI
         val entries = listOf(
-            File(dir, "openclaw.mjs"),
-            File(dir, "dist/index.js"),
-            File(dir, "bin/openclaw.js"),
-            File(dir, "index.js"),
-            File(dir, "openclaw.js")
+            File(dir, "openclaw.mjs"),      // THE correct CLI entry
+            File(dir, "bin/openclaw.js"),    // Legacy fallback
+            File(dir, "openclaw.js")         // Another fallback
         )
         return entries.firstOrNull { it.exists() }
     }
@@ -234,20 +233,8 @@ class BootstrapManager(private val context: Context) {
                     log("─".repeat(40))
                     log("→ Exit code: $exit")
 
-                    // Use node require.resolve to find the EXACT path
-                    log("→ Resolving openclaw path via Node.js...")
-                    val resolvedPath = runCmdOutput(env,
-                        nodeBin.absolutePath, "-e",
-                        "try{console.log(require.resolve('openclaw'))}catch(e){" +
-                        "try{console.log(require.resolve('${baseDir.absolutePath}/lib/node_modules/openclaw'))}catch(e2){" +
-                        "console.log('NOT_FOUND')}}"
-                    )
-                    log("→ require.resolve: $resolvedPath")
-
-                    if (resolvedPath.isNotBlank() && resolvedPath != "NOT_FOUND" && File(resolvedPath).exists()) {
-                        saveOpenclawPath(resolvedPath)
-                        log("✓ Saved openclaw path: $resolvedPath")
-                    }
+                    // Find the CLI entry point (openclaw.mjs, NOT dist/index.js)
+                    log("→ Searching for openclaw CLI entry point...")
 
                     // Also find the openclaw directory and look for entry points
                     val clawDir = findOpenclawDir()

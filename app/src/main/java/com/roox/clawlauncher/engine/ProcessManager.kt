@@ -169,18 +169,23 @@ class ProcessManager(private val context: Context, private val configManager: Co
                 pb.environment().putAll(env)
                 pb.redirectErrorStream(true)
 
-                process = pb.start()
+                val proc = pb.start()
+                process = proc
                 startTime = System.currentTimeMillis()
 
                 // Start reading output in background
-                val reader = BufferedReader(InputStreamReader(process!!.inputStream))
+                val reader = BufferedReader(InputStreamReader(proc.inputStream))
 
-                // Start foreground service
-                val serviceIntent = Intent(context, OpenClawService::class.java)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(serviceIntent)
-                } else {
-                    context.startService(serviceIntent)
+                // Start foreground service (wrapped in try-catch — non-fatal)
+                try {
+                    val serviceIntent = Intent(context, OpenClawService::class.java)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(serviceIntent)
+                    } else {
+                        context.startService(serviceIntent)
+                    }
+                } catch (e: Exception) {
+                    appendLog("⚠️ Service start failed (non-fatal): ${e.message}")
                 }
 
                 // Wait a bit and check if process is alive
@@ -198,9 +203,15 @@ class ProcessManager(private val context: Context, private val configManager: Co
                         }
                     }
 
-                    if (process?.isAlive != true) {
-                        val exit = process?.exitValue() ?: -1
-                        throw Exception("Process exited immediately (code: $exit)")
+                    if (!proc.isAlive) {
+                        val exit = try { proc.exitValue() } catch (_: Exception) { -1 }
+                        appendLog("❌ Process exited with code: $exit")
+                        // Read remaining output before throwing
+                        while (reader.ready()) {
+                            val line = reader.readLine() ?: break
+                            appendLog(line)
+                        }
+                        throw Exception("Process exited (code: $exit). Check logs.")
                     }
 
                     if (started || i >= 10) {
@@ -209,7 +220,7 @@ class ProcessManager(private val context: Context, private val configManager: Co
                     }
                 }
 
-                if (started && process?.isAlive == true) {
+                if (started && proc.isAlive) {
                     appendLog("✓ OpenClaw is running!")
                     _status.value = ServerStatus(
                         state = ServerState.RUNNING,
