@@ -17,6 +17,9 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Install patchelf
+        run: sudo apt-get install -y patchelf
+
       - name: Bundle Termux Node.js as native library
         run: |
           set -e
@@ -24,113 +27,132 @@ jobs:
           
           mkdir -p termux-work && cd termux-work
           
-          # Download Termux package index for aarch64
-          echo "📦 Fetching Termux aarch64 packages..."
+          # Download Termux package indices
+          echo "📦 Fetching package indices..."
           curl -sL "$TERMUX_MIRROR/dists/stable/main/binary-aarch64/Packages.gz" | gunzip > Packages-arm64
-          
-          # Download Termux package index for x86_64 (emulators)
-          echo "📦 Fetching Termux x86_64 packages..."
           curl -sL "$TERMUX_MIRROR/dists/stable/main/binary-x86_64/Packages.gz" | gunzip > Packages-x64
           
           get_pkg_url() {
             awk "/^Package: $2\$/,/^\$/" "Packages-$1" | grep "^Filename:" | head -1 | awk '{print $2}'
           }
           
-          # === ARM64 ===
-          echo "⬇️  Downloading aarch64 packages..."
-          mkdir -p arm64-extract
-          for pkg in nodejs libc++ openssl zlib; do
-            url=$(get_pkg_url arm64 "$pkg")
-            if [ -n "$url" ]; then
-              wget -q "$TERMUX_MIRROR/$url" -O "${pkg}-arm64.deb"
-              mkdir -p tmp_deb
-              ar x "${pkg}-arm64.deb" --output=tmp_deb 2>/dev/null || true
-              for archive in tmp_deb/data.tar.*; do
-                [ -f "$archive" ] && tar xf "$archive" -C arm64-extract/ 2>/dev/null || true
-              done
-              rm -rf tmp_deb
-            fi
-          done
+          extract_deb() {
+            local deb="$1" dest="$2"
+            mkdir -p tmp_deb
+            ar x "$deb" --output=tmp_deb 2>/dev/null || true
+            for archive in tmp_deb/data.tar.*; do
+              [ -f "$archive" ] && tar xf "$archive" -C "$dest" 2>/dev/null || true
+            done
+            rm -rf tmp_deb
+          }
           
-          # === x86_64 ===
-          echo "⬇️  Downloading x86_64 packages..."
-          mkdir -p x64-extract
-          for pkg in nodejs libc++ openssl zlib; do
-            url=$(get_pkg_url x64 "$pkg")
-            if [ -n "$url" ]; then
-              wget -q "$TERMUX_MIRROR/$url" -O "${pkg}-x64.deb"
-              mkdir -p tmp_deb
-              ar x "${pkg}-x64.deb" --output=tmp_deb 2>/dev/null || true
-              for archive in tmp_deb/data.tar.*; do
-                [ -f "$archive" ] && tar xf "$archive" -C x64-extract/ 2>/dev/null || true
-              done
-              rm -rf tmp_deb
-            fi
-          done
-          
-          # === Bundle node binary as native library (ONLY way to execute on Android) ===
-          # nativeLibraryDir is the ONLY directory with execute permission on modern Android
-          
-          mkdir -p ../app/src/main/jniLibs/arm64-v8a
-          mkdir -p ../app/src/main/jniLibs/x86_64
-          
-          # ARM64 node binary
-          NODE_ARM64=$(find arm64-extract -name "node" -path "*/bin/node" -type f | head -1)
-          if [ -n "$NODE_ARM64" ]; then
-            cp "$NODE_ARM64" ../app/src/main/jniLibs/arm64-v8a/libnode.so
-            chmod 755 ../app/src/main/jniLibs/arm64-v8a/libnode.so
-            echo "✅ ARM64 node: $(file "$NODE_ARM64") — $(ls -lh ../app/src/main/jniLibs/arm64-v8a/libnode.so | awk '{print $5}')"
-          else
-            echo "❌ ARM64 node not found!"
-            find arm64-extract -name "node" -type f
-            exit 1
-          fi
-          
-          # x86_64 node binary
-          NODE_X64=$(find x64-extract -name "node" -path "*/bin/node" -type f | head -1)
-          if [ -n "$NODE_X64" ]; then
-            cp "$NODE_X64" ../app/src/main/jniLibs/x86_64/libnode.so
-            chmod 755 ../app/src/main/jniLibs/x86_64/libnode.so
-            echo "✅ x86_64 node: $(file "$NODE_X64") — $(ls -lh ../app/src/main/jniLibs/x86_64/libnode.so | awk '{print $5}')"
-          fi
-          
-          # === Bundle shared libraries as native libs too ===
-          # These must also be in jniLibs so they end up in nativeLibraryDir
-          for arch_dir in arm64 x64; do
-            if [ "$arch_dir" = "arm64" ]; then
-              JNI_DIR="../app/src/main/jniLibs/arm64-v8a"
-              EXTRACT_DIR="arm64-extract"
-            else
-              JNI_DIR="../app/src/main/jniLibs/x86_64"
-              EXTRACT_DIR="x64-extract"
+          process_arch() {
+            local ARCH="$1" JNI_ARCH="$2"
+            echo ""
+            echo "========== Processing $ARCH → $JNI_ARCH =========="
+            
+            mkdir -p "${ARCH}-extract"
+            for pkg in nodejs libc++ openssl zlib; do
+              url=$(get_pkg_url "$ARCH" "$pkg")
+              if [ -n "$url" ]; then
+                echo "  ⬇️  $pkg"
+                wget -q "$TERMUX_MIRROR/$url" -O "${pkg}-${ARCH}.deb"
+                extract_deb "${pkg}-${ARCH}.deb" "${ARCH}-extract"
+              fi
+            done
+            
+            local JNI_DIR="../app/src/main/jniLibs/$JNI_ARCH"
+            mkdir -p "$JNI_DIR"
+            
+            # Find node binary
+            local NODE_BIN=$(find "${ARCH}-extract" -name "node" -path "*/bin/node" -type f | head -1)
+            if [ -z "$NODE_BIN" ]; then
+              echo "  ❌ Node binary not found for $ARCH!"
+              return 1
             fi
             
-            USR_LIB=$(find "$EXTRACT_DIR" -path "*/usr/lib" -type d | head -1)
+            echo "  📋 Node needs (before patching):"
+            readelf -d "$NODE_BIN" | grep NEEDED | head -20
+            
+            # Find the lib directory
+            local USR_LIB=$(find "${ARCH}-extract" -path "*/usr/lib" -type d | head -1)
+            
+            # Copy shared libs and build rename map
+            # Android only extracts files matching lib*.so — no versioned names!
+            # So we rename libz.so.1 → libz_1.so and patchelf node to match
+            declare -A RENAME_MAP
+            
             if [ -n "$USR_LIB" ]; then
-              for lib in libc++_shared.so libcrypto.so libssl.so libz.so; do
-                src=$(find "$USR_LIB" -name "$lib" -type f 2>/dev/null | head -1)
+              echo "  📚 Processing shared libraries..."
+              
+              # Find all .so files that node depends on
+              for needed in $(readelf -d "$NODE_BIN" | grep NEEDED | sed 's/.*\[//;s/\]//'); do
+                # Find the actual library file
+                local src=$(find "$USR_LIB" -name "$needed" -o -name "${needed}.*" 2>/dev/null | head -1)
+                
+                if [ -z "$src" ]; then
+                  # Try resolving the versioned name
+                  local base_name=$(echo "$needed" | sed 's/\.so\..*/\.so/')
+                  src=$(find "$USR_LIB" -name "${base_name}*" -type f 2>/dev/null | head -1)
+                fi
+                
                 if [ -n "$src" ]; then
-                  # Android requires lib*.so naming
-                  target_name="$lib"
-                  # Ensure it starts with lib
-                  case "$target_name" in lib*) ;; *) target_name="lib${target_name}" ;; esac
-                  cp "$src" "$JNI_DIR/$target_name"
-                  echo "  📚 [$arch_dir] $target_name"
+                  # Generate Android-compatible name: replace . with _ after .so
+                  local android_name
+                  if echo "$needed" | grep -q '\.so\.'; then
+                    # versioned: libz.so.1 → libz_v1.so
+                    android_name=$(echo "$needed" | sed 's/\.so\.\(.*\)/_v\1.so/')
+                  else
+                    android_name="$needed"
+                  fi
+                  
+                  # Ensure lib prefix
+                  case "$android_name" in lib*) ;; *) android_name="lib${android_name}" ;; esac
+                  
+                  cp "$src" "$JNI_DIR/$android_name"
+                  RENAME_MAP["$needed"]="$android_name"
+                  echo "    $needed → $android_name ($(ls -lh "$JNI_DIR/$android_name" | awk '{print $5}'))"
+                else
+                  echo "    ⚠️  $needed — not found (may be system lib)"
                 fi
               done
             fi
-          done
+            
+            # Patch node binary to use renamed libraries
+            cp "$NODE_BIN" "$JNI_DIR/libnode.so"
+            chmod 755 "$JNI_DIR/libnode.so"
+            
+            for old_name in "${!RENAME_MAP[@]}"; do
+              local new_name="${RENAME_MAP[$old_name]}"
+              if [ "$old_name" != "$new_name" ]; then
+                echo "  🔧 patchelf: $old_name → $new_name"
+                patchelf --replace-needed "$old_name" "$new_name" "$JNI_DIR/libnode.so" 2>/dev/null || echo "    (skip)"
+              fi
+            done
+            
+            # Also patch the interpreter if it's set to termux linker
+            patchelf --remove-rpath "$JNI_DIR/libnode.so" 2>/dev/null || true
+            
+            echo "  📋 Node needs (after patching):"
+            readelf -d "$JNI_DIR/libnode.so" | grep NEEDED | head -20
+            
+            echo "  ✅ $JNI_ARCH done!"
+          }
           
-          # === Bundle npm as assets (JS files, not executables) ===
+          process_arch "arm64" "arm64-v8a"
+          process_arch "x64" "x86_64" || echo "⚠️  x86_64 optional, continuing..."
+          
+          # Bundle npm as assets
           NPM_DIR=$(find arm64-extract -path "*/lib/node_modules/npm" -type d | head -1)
           if [ -n "$NPM_DIR" ]; then
             mkdir -p ../app/src/main/assets/npm
             cp -r "$NPM_DIR"/* ../app/src/main/assets/npm/
+            echo ""
             echo "✅ npm bundled: $(du -sh ../app/src/main/assets/npm/ | awk '{print $1}')"
           fi
           
           echo ""
-          echo "📊 jniLibs:"
+          echo "📊 Final jniLibs:"
           find ../app/src/main/jniLibs -type f -exec ls -lh {} \;
 
       - name: Install Gradle wrapper
