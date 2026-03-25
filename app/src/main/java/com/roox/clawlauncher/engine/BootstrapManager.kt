@@ -96,6 +96,9 @@ class BootstrapManager(private val context: Context) {
                 // Step 2: Extract npm from ZIP asset
                 if (!isNpmInstalled) {
                     _progress.value = _progress.value.copy(step = "Setting up npm...", progress = 0.30f)
+                    // List available assets for debugging
+                    val assets = context.assets.list("") ?: emptyArray()
+                    log("-> Assets root: ${assets.joinToString()}")
                     log("-> Extracting npm from npm.zip...")
                     npmDir.mkdirs()
                     extractZipAsset("npm.zip", npmDir)
