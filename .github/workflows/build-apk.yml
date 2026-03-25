@@ -52,7 +52,7 @@ jobs:
             echo "========== Processing $ARCH → $JNI_ARCH =========="
             
             mkdir -p "${ARCH}-extract"
-            for pkg in nodejs libc++ openssl zlib; do
+            for pkg in nodejs libc++ openssl zlib c-ares libicu libsqlite; do
               url=$(get_pkg_url "$ARCH" "$pkg")
               if [ -n "$url" ]; then
                 echo "  ⬇️  $pkg"
