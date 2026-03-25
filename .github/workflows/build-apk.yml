@@ -27,17 +27,13 @@ jobs:
           PKGS="nodejs libc++ openssl zlib c-ares libicu libsqlite"
           
           mkdir -p work && cd work
-          
-          # Get package index
           curl -sL "$MIRROR/dists/stable/main/binary-aarch64/Packages.gz" | gunzip > Packages
           
-          # Download and extract all packages
           mkdir -p extracted
           for pkg in $PKGS; do
-            # Use grep+awk instead of awk regex (avoids issues with + in package names like libc++)
             url=$(grep -A 20 "^Package: ${pkg}$" Packages | grep "^Filename:" | head -1 | awk '{print $2}')
             [ -z "$url" ] && echo "WARN: $pkg not found" && continue
-            echo "📦 $pkg"
+            echo "📦 $pkg → $url"
             wget -q "$MIRROR/$url" -O "${pkg}.deb"
             mkdir -p _deb
             ar x "${pkg}.deb" --output=_deb 2>/dev/null || true
@@ -45,141 +41,120 @@ jobs:
             rm -rf _deb
           done
           
-          # Locate everything
           NODE=$(find extracted -name "node" -path "*/bin/node" -type f | head -1)
-          LIBDIR=$(find extracted -path "*/usr/lib" -type d | head -1)
-          
           echo "Node: $NODE"
-          echo "Libs: $LIBDIR"
           echo ""
-          echo "=== Node NEEDED (original) ==="
+          echo "=== Original NEEDED ==="
           readelf -d "$NODE" | grep NEEDED
           
-          echo ""
-          echo "=== Available .so files ==="
-          ls -la "$LIBDIR"/*.so* 2>/dev/null || true
-          
-          # Strategy: patchelf node to replace ALL versioned deps with unversioned names
-          # Then bundle both names in jniLibs
           JNIDIR="../app/src/main/jniLibs/arm64-v8a"
           mkdir -p "$JNIDIR"
           
-          # Step 1: Copy node binary
+          # === STEP 1: Copy node binary ===
           cp "$NODE" "$JNIDIR/libnode.so"
           chmod 755 "$JNIDIR/libnode.so"
           
-          # Step 2: patchelf - replace versioned NEEDED with unversioned
-          echo ""
-          echo "=== Patching node binary ==="
-          
-          # libz.so.1 → libz.so  
-          patchelf --replace-needed "libz.so.1" "libz.so" "$JNIDIR/libnode.so" && echo "  libz.so.1 → libz.so" || true
-          # libcrypto.so.3 → libcrypto.so
-          patchelf --replace-needed "libcrypto.so.3" "libcrypto.so" "$JNIDIR/libnode.so" && echo "  libcrypto.so.3 → libcrypto.so" || true
-          # libssl.so.3 → libssl.so
-          patchelf --replace-needed "libssl.so.3" "libssl.so" "$JNIDIR/libnode.so" && echo "  libssl.so.3 → libssl.so" || true
-          # libicui18n.so.78 → libicui18n.so
-          patchelf --replace-needed "libicui18n.so.78" "libicui18n.so" "$JNIDIR/libnode.so" && echo "  libicui18n.so.78 → libicui18n.so" || true
-          # libicuuc.so.78 → libicuuc.so
-          patchelf --replace-needed "libicuuc.so.78" "libicuuc.so" "$JNIDIR/libnode.so" && echo "  libicuuc.so.78 → libicuuc.so" || true
-          
-          # Remove rpath (points to Termux paths)
-          patchelf --remove-rpath "$JNIDIR/libnode.so" 2>/dev/null || true
-          
-          echo ""
-          echo "=== Node NEEDED (after patch) ==="
-          readelf -d "$JNIDIR/libnode.so" | grep NEEDED
-          
-          # Step 3: Copy ALL needed .so files (unversioned names)
+          # === STEP 2: Copy ALL needed libraries (unversioned names) ===
+          # These are the direct + transitive deps we need
           echo ""
           echo "=== Copying libraries ==="
           
-          NEEDED_LIBS="libz.so libcares.so libsqlite3.so libcrypto.so libssl.so libicui18n.so libicuuc.so libc++_shared.so libicudata.so"
-          
-          for lib in $NEEDED_LIBS; do
-            # Try exact match in the primary lib dir
-            src="$LIBDIR/$lib"
-            if [ ! -f "$src" ]; then
-              # Search EVERYWHERE in extracted (covers different Termux package layouts)
-              src=$(find extracted -name "$lib" -type f 2>/dev/null | head -1)
-            fi
-            if [ ! -f "$src" ] && [ -n "$LIBDIR" ]; then
-              # Try symlink targets — some are symlinks to versioned files
-              for candidate in "$LIBDIR/${lib}"*; do
-                [ -f "$candidate" ] && src="$candidate" && break
-              done
-            fi
+          copy_lib() {
+            local name="$1"
+            local src=$(find extracted -name "$name" -type f 2>/dev/null | head -1)
             if [ -f "$src" ]; then
-              cp "$src" "$JNIDIR/$lib"
-              echo "  ✅ $lib ($(ls -lh "$JNIDIR/$lib" | awk '{print $5}'))"
-            else
-              echo "  ❌ $lib NOT FOUND — searching deeper..."
-              # Last resort: search by partial name
-              partial=$(echo "$lib" | sed 's/\.so$//')
-              deep=$(find extracted -name "${partial}*" -type f 2>/dev/null | head -1)
-              if [ -n "$deep" ]; then
-                cp "$deep" "$JNIDIR/$lib"
-                echo "    → found at $deep ✅"
-              else
-                echo "    → truly missing ❌"
-              fi
+              cp "$src" "$JNIDIR/$name"
+              echo "  ✅ $name ($(ls -lh "$JNIDIR/$name" | awk '{print $5}'))"
+              return 0
             fi
+            # Try versioned variant (e.g., libz.so → libz.so.1)
+            local base=$(echo "$name" | sed 's/\.so$//')
+            src=$(find extracted -name "${base}.so.*" -type f 2>/dev/null | head -1)
+            if [ -f "$src" ]; then
+              cp "$src" "$JNIDIR/$name"
+              echo "  ✅ $name (from $(basename "$src"), $(ls -lh "$JNIDIR/$name" | awk '{print $5}'))"
+              return 0
+            fi
+            echo "  ❌ $name NOT FOUND"
+            return 1
+          }
+          
+          copy_lib "libz.so"
+          copy_lib "libcares.so"
+          copy_lib "libsqlite3.so"
+          copy_lib "libcrypto.so"
+          copy_lib "libssl.so"
+          copy_lib "libicui18n.so"
+          copy_lib "libicuuc.so"
+          copy_lib "libicudata.so"
+          copy_lib "libc++_shared.so"
+          
+          # === STEP 3: The KEY fix — patchelf SONAME + NEEDED on ALL binaries ===
+          # Problem: patchelf --replace-needed changes DT_NEEDED but the library's
+          # own SONAME still says e.g. "libcrypto.so.3". The linker then can't
+          # match verneed entries. We must set-soname on each lib too.
+          
+          # All versioned → unversioned renames
+          RENAMES="libz.so.1:libz.so libcrypto.so.3:libcrypto.so libssl.so.3:libssl.so libicui18n.so.78:libicui18n.so libicuuc.so.78:libicuuc.so libicudata.so.78:libicudata.so"
+          
+          echo ""
+          echo "=== Patching ALL binaries ==="
+          
+          for so_file in "$JNIDIR"/*.so; do
+            fname=$(basename "$so_file")
+            echo "  🔧 $fname"
+            
+            # Set SONAME to match the filename (critical!)
+            patchelf --set-soname "$fname" "$so_file" 2>/dev/null && echo "    soname → $fname" || true
+            
+            # Replace all versioned NEEDED entries with unversioned
+            for rename in $RENAMES; do
+              old="${rename%%:*}"
+              new="${rename##*:}"
+              patchelf --replace-needed "$old" "$new" "$so_file" 2>/dev/null || true
+            done
+            
+            # Remove rpath (Termux paths)
+            patchelf --remove-rpath "$so_file" 2>/dev/null || true
           done
           
-          # Step 4: Verify — check what libnode.so needs vs what we have
+          # === STEP 4: Verify everything ===
           echo ""
           echo "=== Verification ==="
-          ALL_OK=true
-          for needed in $(readelf -d "$JNIDIR/libnode.so" | grep NEEDED | sed 's/.*\[//;s/\]//'); do
-            case "$needed" in
-              libc.so|libm.so|libdl.so|liblog.so|libandroid.so)
-                echo "  ✅ $needed (system)"
-                ;;
-              *)
-                if [ -f "$JNIDIR/$needed" ]; then
-                  echo "  ✅ $needed"
-                else
-                  echo "  ❌ $needed MISSING!"
-                  ALL_OK=false
-                fi
-                ;;
-            esac
-          done
           
-          # Also check transitive deps of our bundled libs
-          echo ""
-          echo "=== Transitive dependency check ==="
-          for so in "$JNIDIR"/lib*.so; do
-            [ "$(basename "$so")" = "libnode.so" ] && continue
-            for needed in $(readelf -d "$so" 2>/dev/null | grep NEEDED | sed 's/.*\[//;s/\]//' || true); do
+          # Check node
+          echo "--- libnode.so ---"
+          echo "  SONAME: $(patchelf --print-soname "$JNIDIR/libnode.so" 2>/dev/null || echo 'none')"
+          readelf -d "$JNIDIR/libnode.so" | grep NEEDED
+          
+          # Check each lib
+          for so_file in "$JNIDIR"/*.so; do
+            [ "$(basename "$so_file")" = "libnode.so" ] && continue
+            fname=$(basename "$so_file")
+            soname=$(patchelf --print-soname "$so_file" 2>/dev/null || echo "?")
+            echo "--- $fname (soname: $soname) ---"
+            for needed in $(readelf -d "$so_file" 2>/dev/null | grep NEEDED | sed 's/.*\[//;s/\]//'); do
               case "$needed" in
                 libc.so|libm.so|libdl.so|liblog.so|libandroid.so) ;;
                 *)
-                  if [ ! -f "$JNIDIR/$needed" ]; then
-                    echo "  ⚠️  $(basename "$so") needs $needed — MISSING, patching..."
-                    # Try to find and copy it
-                    tsrc=$(find extracted -name "$needed" -type f 2>/dev/null | head -1)
-                    if [ -n "$tsrc" ]; then
-                      cp "$tsrc" "$JNIDIR/$needed"
-                      echo "    → copied"
-                    else
-                      # Try unversioned
-                      base=$(echo "$needed" | sed 's/\.so\..*/\.so/')
-                      patchelf --replace-needed "$needed" "$base" "$so" 2>/dev/null && echo "    → patched to $base" || true
-                    fi
+                  if [ -f "$JNIDIR/$needed" ]; then
+                    echo "  ✅ $needed"
+                  else
+                    echo "  ❌ $needed MISSING!"
                   fi
                   ;;
               esac
             done
           done
           
+          # Check verneed sections
+          echo ""
+          echo "=== verneed check (libnode.so) ==="
+          readelf -V "$JNIDIR/libnode.so" 2>/dev/null | head -30 || echo "(no version info)"
+          
           echo ""
           echo "=== Final jniLibs ==="
           ls -lh "$JNIDIR"/
-          
-          if [ "$ALL_OK" = false ]; then
-            echo "⚠️  Some libraries missing but continuing..."
-          fi
 
       - name: Bundle npm as assets
         run: |
