@@ -20,139 +20,159 @@ jobs:
       - name: Install patchelf
         run: sudo apt-get install -y patchelf
 
-      - name: Bundle Termux Node.js as native library
+      - name: Bundle Termux Node.js
         run: |
           set -e
-          TERMUX_MIRROR="https://packages-cf.termux.dev/apt/termux-main"
+          MIRROR="https://packages-cf.termux.dev/apt/termux-main"
+          PKGS="nodejs libc++ openssl zlib c-ares libicu libsqlite"
           
-          mkdir -p termux-work && cd termux-work
+          mkdir -p work && cd work
           
-          # Download Termux package indices
-          echo "📦 Fetching package indices..."
-          curl -sL "$TERMUX_MIRROR/dists/stable/main/binary-aarch64/Packages.gz" | gunzip > Packages-arm64
-          curl -sL "$TERMUX_MIRROR/dists/stable/main/binary-x86_64/Packages.gz" | gunzip > Packages-x64
+          # Get package index
+          curl -sL "$MIRROR/dists/stable/main/binary-aarch64/Packages.gz" | gunzip > Packages
           
-          get_pkg_url() {
-            awk "/^Package: $2\$/,/^\$/" "Packages-$1" | grep "^Filename:" | head -1 | awk '{print $2}'
-          }
+          # Download and extract all packages
+          mkdir -p extracted
+          for pkg in $PKGS; do
+            url=$(awk "/^Package: ${pkg}\$/,/^\$/" Packages | grep "^Filename:" | head -1 | awk '{print $2}')
+            [ -z "$url" ] && echo "WARN: $pkg not found" && continue
+            echo "📦 $pkg"
+            wget -q "$MIRROR/$url" -O "${pkg}.deb"
+            mkdir -p _deb
+            ar x "${pkg}.deb" --output=_deb 2>/dev/null || true
+            for f in _deb/data.tar.*; do [ -f "$f" ] && tar xf "$f" -C extracted/ 2>/dev/null || true; done
+            rm -rf _deb
+          done
           
-          extract_deb() {
-            local deb="$1" dest="$2"
-            mkdir -p tmp_deb
-            ar x "$deb" --output=tmp_deb 2>/dev/null || true
-            for archive in tmp_deb/data.tar.*; do
-              [ -f "$archive" ] && tar xf "$archive" -C "$dest" 2>/dev/null || true
-            done
-            rm -rf tmp_deb
-          }
+          # Locate everything
+          NODE=$(find extracted -name "node" -path "*/bin/node" -type f | head -1)
+          LIBDIR=$(find extracted -path "*/usr/lib" -type d | head -1)
           
-          process_arch() {
-            local ARCH="$1" JNI_ARCH="$2"
-            echo ""
-            echo "========== Processing $ARCH → $JNI_ARCH =========="
-            
-            mkdir -p "${ARCH}-extract"
-            for pkg in nodejs libc++ openssl zlib c-ares libicu libsqlite; do
-              url=$(get_pkg_url "$ARCH" "$pkg")
-              if [ -n "$url" ]; then
-                echo "  ⬇️  $pkg"
-                wget -q "$TERMUX_MIRROR/$url" -O "${pkg}-${ARCH}.deb"
-                extract_deb "${pkg}-${ARCH}.deb" "${ARCH}-extract"
-              fi
-            done
-            
-            local JNI_DIR="../app/src/main/jniLibs/$JNI_ARCH"
-            mkdir -p "$JNI_DIR"
-            
-            # Find node binary
-            local NODE_BIN=$(find "${ARCH}-extract" -name "node" -path "*/bin/node" -type f | head -1)
-            if [ -z "$NODE_BIN" ]; then
-              echo "  ❌ Node binary not found for $ARCH!"
-              return 1
-            fi
-            
-            echo "  📋 Node needs (before patching):"
-            readelf -d "$NODE_BIN" | grep NEEDED | head -20
-            
-            # Copy ALL .so files from extracted Termux packages
-            # This catches direct deps AND transitive deps (like libc++_shared.so)
-            local USR_LIB=$(find "${ARCH}-extract" -path "*/usr/lib" -type d | head -1)
-            
-            declare -A RENAME_MAP
-            
-            if [ -n "$USR_LIB" ]; then
-              echo "  📚 Copying ALL shared libraries from Termux..."
-              
-              # Find every .so file (including versioned ones like libz.so.1)
-              find "$USR_LIB" -maxdepth 1 \( -name "*.so" -o -name "*.so.*" \) -type f | while read src; do
-                local orig_name=$(basename "$src")
-                local android_name
-                
-                if echo "$orig_name" | grep -q '\.so\.'; then
-                  # Versioned: libz.so.1 → libz_v1.so
-                  android_name=$(echo "$orig_name" | sed 's/\.so\.\(.*\)/_v\1.so/')
-                else
-                  android_name="$orig_name"
-                fi
-                
-                # Ensure lib prefix
-                case "$android_name" in lib*) ;; *) android_name="lib${android_name}" ;; esac
-                
-                cp "$src" "$JNI_DIR/$android_name"
-                echo "    $orig_name → $android_name"
-                
-                # Track renames for patchelf
-                if [ "$orig_name" != "$android_name" ]; then
-                  echo "$orig_name=$android_name" >> /tmp/rename_map_${JNI_ARCH}.txt
-                fi
-              done
-            fi
-            
-            # Copy node binary
-            cp "$NODE_BIN" "$JNI_DIR/libnode.so"
-            chmod 755 "$JNI_DIR/libnode.so"
-            
-            # Patch node binary: rename all versioned NEEDED entries
-            if [ -f "/tmp/rename_map_${JNI_ARCH}.txt" ]; then
-              while IFS='=' read -r old_name new_name; do
-                echo "  🔧 patchelf: $old_name → $new_name"
-                patchelf --replace-needed "$old_name" "$new_name" "$JNI_DIR/libnode.so" 2>/dev/null || true
-              done < "/tmp/rename_map_${JNI_ARCH}.txt"
-            fi
-            
-            # Also patch all .so libs that might reference versioned names
-            if [ -f "/tmp/rename_map_${JNI_ARCH}.txt" ]; then
-              for so_file in "$JNI_DIR"/lib*.so; do
-                [ "$so_file" = "$JNI_DIR/libnode.so" ] && continue
-                while IFS='=' read -r old_name new_name; do
-                  patchelf --replace-needed "$old_name" "$new_name" "$so_file" 2>/dev/null || true
-                done < "/tmp/rename_map_${JNI_ARCH}.txt"
-              done
-            fi
-            
-            patchelf --remove-rpath "$JNI_DIR/libnode.so" 2>/dev/null || true
-            
-            echo "  📋 Node NEEDED (after patching):"
-            readelf -d "$JNI_DIR/libnode.so" | grep NEEDED | head -20
-            
-            echo "  ✅ $JNI_ARCH done!"
-          }
-          
-          process_arch "arm64" "arm64-v8a"
-          process_arch "x64" "x86_64" || echo "⚠️  x86_64 optional, continuing..."
-          
-          # Bundle npm as assets
-          NPM_DIR=$(find arm64-extract -path "*/lib/node_modules/npm" -type d | head -1)
-          if [ -n "$NPM_DIR" ]; then
-            mkdir -p ../app/src/main/assets/npm
-            cp -r "$NPM_DIR"/* ../app/src/main/assets/npm/
-            echo ""
-            echo "✅ npm bundled: $(du -sh ../app/src/main/assets/npm/ | awk '{print $1}')"
-          fi
+          echo "Node: $NODE"
+          echo "Libs: $LIBDIR"
+          echo ""
+          echo "=== Node NEEDED (original) ==="
+          readelf -d "$NODE" | grep NEEDED
           
           echo ""
-          echo "📊 Final jniLibs:"
-          find ../app/src/main/jniLibs -type f -exec ls -lh {} \;
+          echo "=== Available .so files ==="
+          ls -la "$LIBDIR"/*.so* 2>/dev/null || true
+          
+          # Strategy: patchelf node to replace ALL versioned deps with unversioned names
+          # Then bundle both names in jniLibs
+          JNIDIR="../app/src/main/jniLibs/arm64-v8a"
+          mkdir -p "$JNIDIR"
+          
+          # Step 1: Copy node binary
+          cp "$NODE" "$JNIDIR/libnode.so"
+          chmod 755 "$JNIDIR/libnode.so"
+          
+          # Step 2: patchelf - replace versioned NEEDED with unversioned
+          echo ""
+          echo "=== Patching node binary ==="
+          
+          # libz.so.1 → libz.so  
+          patchelf --replace-needed "libz.so.1" "libz.so" "$JNIDIR/libnode.so" && echo "  libz.so.1 → libz.so" || true
+          # libcrypto.so.3 → libcrypto.so
+          patchelf --replace-needed "libcrypto.so.3" "libcrypto.so" "$JNIDIR/libnode.so" && echo "  libcrypto.so.3 → libcrypto.so" || true
+          # libssl.so.3 → libssl.so
+          patchelf --replace-needed "libssl.so.3" "libssl.so" "$JNIDIR/libnode.so" && echo "  libssl.so.3 → libssl.so" || true
+          # libicui18n.so.78 → libicui18n.so
+          patchelf --replace-needed "libicui18n.so.78" "libicui18n.so" "$JNIDIR/libnode.so" && echo "  libicui18n.so.78 → libicui18n.so" || true
+          # libicuuc.so.78 → libicuuc.so
+          patchelf --replace-needed "libicuuc.so.78" "libicuuc.so" "$JNIDIR/libnode.so" && echo "  libicuuc.so.78 → libicuuc.so" || true
+          
+          # Remove rpath (points to Termux paths)
+          patchelf --remove-rpath "$JNIDIR/libnode.so" 2>/dev/null || true
+          
+          echo ""
+          echo "=== Node NEEDED (after patch) ==="
+          readelf -d "$JNIDIR/libnode.so" | grep NEEDED
+          
+          # Step 3: Copy ALL needed .so files (unversioned names)
+          echo ""
+          echo "=== Copying libraries ==="
+          
+          NEEDED_LIBS="libz.so libcares.so libsqlite3.so libcrypto.so libssl.so libicui18n.so libicuuc.so libc++_shared.so libicudata.so"
+          
+          for lib in $NEEDED_LIBS; do
+            # Try exact match first
+            src="$LIBDIR/$lib"
+            if [ ! -f "$src" ]; then
+              # Try finding it anywhere
+              src=$(find extracted -name "$lib" -type f 2>/dev/null | head -1)
+            fi
+            if [ -f "$src" ]; then
+              cp "$src" "$JNIDIR/$lib"
+              echo "  ✅ $lib ($(ls -lh "$JNIDIR/$lib" | awk '{print $5}'))"
+            else
+              echo "  ❌ $lib NOT FOUND"
+            fi
+          done
+          
+          # Step 4: Verify — check what libnode.so needs vs what we have
+          echo ""
+          echo "=== Verification ==="
+          ALL_OK=true
+          for needed in $(readelf -d "$JNIDIR/libnode.so" | grep NEEDED | sed 's/.*\[//;s/\]//'); do
+            case "$needed" in
+              libc.so|libm.so|libdl.so|liblog.so|libandroid.so)
+                echo "  ✅ $needed (system)"
+                ;;
+              *)
+                if [ -f "$JNIDIR/$needed" ]; then
+                  echo "  ✅ $needed"
+                else
+                  echo "  ❌ $needed MISSING!"
+                  ALL_OK=false
+                fi
+                ;;
+            esac
+          done
+          
+          # Also check transitive deps of our bundled libs
+          echo ""
+          echo "=== Transitive dependency check ==="
+          for so in "$JNIDIR"/lib*.so; do
+            [ "$(basename "$so")" = "libnode.so" ] && continue
+            for needed in $(readelf -d "$so" 2>/dev/null | grep NEEDED | sed 's/.*\[//;s/\]//' || true); do
+              case "$needed" in
+                libc.so|libm.so|libdl.so|liblog.so|libandroid.so) ;;
+                *)
+                  if [ ! -f "$JNIDIR/$needed" ]; then
+                    echo "  ⚠️  $(basename "$so") needs $needed — MISSING, patching..."
+                    # Try to find and copy it
+                    tsrc=$(find extracted -name "$needed" -type f 2>/dev/null | head -1)
+                    if [ -n "$tsrc" ]; then
+                      cp "$tsrc" "$JNIDIR/$needed"
+                      echo "    → copied"
+                    else
+                      # Try unversioned
+                      base=$(echo "$needed" | sed 's/\.so\..*/\.so/')
+                      patchelf --replace-needed "$needed" "$base" "$so" 2>/dev/null && echo "    → patched to $base" || true
+                    fi
+                  fi
+                  ;;
+              esac
+            done
+          done
+          
+          echo ""
+          echo "=== Final jniLibs ==="
+          ls -lh "$JNIDIR"/
+          
+          if [ "$ALL_OK" = false ]; then
+            echo "⚠️  Some libraries missing but continuing..."
+          fi
+
+      - name: Bundle npm as assets
+        run: |
+          NPM_DIR=$(find work/extracted -path "*/lib/node_modules/npm" -type d | head -1)
+          if [ -n "$NPM_DIR" ]; then
+            mkdir -p app/src/main/assets/npm
+            cp -r "$NPM_DIR"/* app/src/main/assets/npm/
+            echo "✅ npm: $(du -sh app/src/main/assets/npm/ | awk '{print $1}')"
+          fi
 
       - name: Install Gradle wrapper
         run: |

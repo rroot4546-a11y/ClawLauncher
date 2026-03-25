@@ -59,7 +59,7 @@ class ProcessManager(private val context: Context, private val configManager: Co
         val env = mutableMapOf(
             "HOME" to baseDir.absolutePath,
             "PATH" to "$nativeLibDir:/system/bin:/system/xbin",
-            "LD_LIBRARY_PATH" to NativeLibHelper.getLibPath(context),
+            "LD_LIBRARY_PATH" to nativeLibDir,
             "NODE_ENV" to "production",
             "TERM" to "xterm-256color",
             "npm_config_prefix" to baseDir.absolutePath,
