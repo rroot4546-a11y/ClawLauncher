@@ -20,17 +20,14 @@ data class SetupProgress(
     val log: String = ""
 )
 
-/**
- * Bootstrap manager that extracts Termux-compiled Node.js from APK assets.
- * 
- * Termux Node.js is compiled against Android's Bionic libc (not glibc),
- * so it runs natively on Android without root or special permissions.
- * 
- * Asset layout (bundled during CI):
- *   assets/node-android/bin/node       — Termux node binary (aarch64)
- *   assets/node-android/lib/*.so       — shared libraries (libc++, openssl, etc)
- *   assets/node-android/lib/node_modules/npm/ — npm package manager
- */
+// Bootstrap manager that extracts Termux-compiled Node.js from APK assets.
+// Termux Node.js is compiled against Android Bionic libc (not glibc),
+// so it runs natively on Android without root or special permissions.
+//
+// Asset layout (bundled during CI):
+//   assets/node-android/bin/node       - Termux node binary (aarch64)
+//   assets/node-android/lib/           - shared libraries (libc++, openssl, etc)
+//   assets/node-android/lib/node_modules/npm/ - npm package manager
 class BootstrapManager(private val context: Context) {
     private val _progress = MutableStateFlow(SetupProgress())
     val progress: StateFlow<SetupProgress> = _progress
@@ -199,9 +196,7 @@ class BootstrapManager(private val context: Context) {
         }
     }
 
-    /**
-     * Recursively extract assets to a destination directory.
-     */
+    // Recursively extract assets to a destination directory.
     private fun extractAssetsRecursive(assetPath: String, destDir: File, onFile: (Int) -> Unit = {}) {
         var count = 0
 
@@ -232,10 +227,8 @@ class BootstrapManager(private val context: Context) {
         log("✓ Extracted $count files from assets")
     }
 
-    /**
-     * Build environment variables for running node.
-     * Sets LD_LIBRARY_PATH to our bundled Termux libs.
-     */
+    // Build environment variables for running node.
+    // Sets LD_LIBRARY_PATH to bundled Termux libs.
     private fun buildEnv(): Map<String, String> = mapOf(
         "HOME" to baseDir.absolutePath,
         "PATH" to "${File(baseDir, "android-node/bin").absolutePath}:/system/bin:/system/xbin",
