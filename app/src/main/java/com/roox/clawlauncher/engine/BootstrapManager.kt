@@ -200,7 +200,7 @@ class BootstrapManager(private val context: Context) {
                         nodeBin.absolutePath, npmCli.absolutePath,
                         "install", "openclaw",
                         "--prefix", baseDir.absolutePath,
-                        "--no-optional", "--no-audit", "--no-fund",
+                        "--no-audit", "--no-fund",
                         "--ignore-scripts", "--force"
                     ) { line ->
                         log("  $line")
