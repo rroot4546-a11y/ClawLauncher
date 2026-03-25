@@ -50,22 +50,29 @@ class BootstrapManager(private val context: Context) {
     val isOpenClawInstalled: Boolean get() = openclawMain != null
 
     /**
-     * Recursively search for openclaw.js under baseDir.
-     * Checks common known paths first, then falls back to recursive search.
+     * Recursively search for openclaw entry point under baseDir.
+     * The binary is openclaw.mjs (not openclaw.js), main is dist/index.js
      */
     private fun findOpenclawJs(): File? {
         // Check known paths first (fast path)
         val knownPaths = listOf(
+            // openclaw.mjs is the actual bin entry
+            File(baseDir, "node_modules/openclaw/openclaw.mjs"),
+            File(baseDir, "lib/node_modules/openclaw/openclaw.mjs"),
+            // dist/index.js is the main entry
+            File(baseDir, "node_modules/openclaw/dist/index.js"),
+            File(baseDir, "lib/node_modules/openclaw/dist/index.js"),
+            // Legacy paths just in case
             File(baseDir, "node_modules/openclaw/bin/openclaw.js"),
             File(baseDir, "lib/node_modules/openclaw/bin/openclaw.js"),
-            File(baseDir, "node_modules/.package-lock.json"), // indicator npm wrote here
         )
-        for (p in knownPaths.take(2)) {
+        for (p in knownPaths) {
             if (p.exists()) return p
         }
 
-        // Recursive search: look for any file named openclaw.js under baseDir
-        return findFileRecursive(baseDir, "openclaw.js", maxDepth = 8)
+        // Recursive search: look for openclaw.mjs first, then openclaw.js
+        return findFileRecursive(baseDir, "openclaw.mjs", maxDepth = 8)
+            ?: findFileRecursive(baseDir, "openclaw.js", maxDepth = 8)
     }
 
     /**
