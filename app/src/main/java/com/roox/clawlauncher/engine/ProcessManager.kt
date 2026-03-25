@@ -36,7 +36,8 @@ class ProcessManager(private val context: Context, private val configManager: Co
     private val logBuffer = StringBuilder()
 
     private val baseDir: File get() = File(context.filesDir, "openclaw")
-    private val nodeBin: File get() = File(context.applicationInfo.nativeLibraryDir, "libnode.so")
+    private val nodeBin: File get() = File(baseDir, "android-node/bin/node")
+    private val nodeLibDir: File get() = File(baseDir, "android-node/lib")
     private val openclawMain: File get() = File(baseDir, "node_modules/openclaw/bin/openclaw.js")
 
     val isInstalled: Boolean get() = nodeBin.exists() && openclawMain.exists()
@@ -57,7 +58,8 @@ class ProcessManager(private val context: Context, private val configManager: Co
         val config = configManager.config.value
         val env = mutableMapOf(
             "HOME" to baseDir.absolutePath,
-            "PATH" to "${context.applicationInfo.nativeLibraryDir}:/system/bin:/system/xbin",
+            "PATH" to "${File(baseDir, "android-node/bin").absolutePath}:/system/bin:/system/xbin",
+            "LD_LIBRARY_PATH" to nodeLibDir.absolutePath,
             "NODE_ENV" to "production",
             "TERM" to "xterm-256color",
             "npm_config_prefix" to baseDir.absolutePath,
@@ -249,8 +251,9 @@ class ProcessManager(private val context: Context, private val configManager: Co
             "State" to s.state.name,
             "Uptime" to uptimeStr,
             "Port" to s.port.toString(),
-            "Node.js" to if (nodeBin.exists()) "✓ (native lib)" else "Not found",
+            "Node.js" to if (nodeBin.exists()) "✓ (Termux)" else "Not found",
             "Node Path" to nodeBin.absolutePath,
+            "Libs" to nodeLibDir.absolutePath,
             "OpenClaw" to if (openclawMain.exists()) "✓ Installed" else "Not installed",
             "Base Dir" to baseDir.absolutePath,
             "Workspace" to File(baseDir, "workspace").absolutePath,

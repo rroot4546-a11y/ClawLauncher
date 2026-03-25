@@ -20,7 +20,6 @@
     <application
         android:name=".ClawApp"
         android:allowBackup="true"
-        android:extractNativeLibs="true"
         android:icon="@android:drawable/sym_def_app_icon"
         android:label="ClawLauncher"
         android:supportsRtl="true"
