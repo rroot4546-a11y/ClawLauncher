@@ -41,9 +41,17 @@ class BootstrapManager(private val context: Context) {
     private val npmDir: File get() = File(baseDir, "npm")
     private val npmCli: File get() = File(npmDir, "bin/npm-cli.js")
 
-    // OpenClaw installed via npm
-    private val nodeModulesDir: File get() = File(baseDir, "node_modules")
-    private val openclawMain: File get() = File(nodeModulesDir, "openclaw/bin/openclaw.js")
+    // OpenClaw installed via npm (check both possible locations)
+    // npm --prefix may install to node_modules/ OR lib/node_modules/
+    private val openclawMain: File get() {
+        val path1 = File(baseDir, "node_modules/openclaw/bin/openclaw.js")
+        val path2 = File(baseDir, "lib/node_modules/openclaw/bin/openclaw.js")
+        return when {
+            path1.exists() -> path1
+            path2.exists() -> path2
+            else -> path1 // default
+        }
+    }
 
     val isNodeInstalled: Boolean get() = nodeBin.exists()
     val isNpmInstalled: Boolean get() = npmCli.exists()
@@ -123,6 +131,11 @@ class BootstrapManager(private val context: Context) {
                 _progress.value = _progress.value.copy(progress = 0.40f)
 
                 // Step 3: Install OpenClaw
+                log("-> Checking OpenClaw paths:")
+                log("   node_modules/: ${File(baseDir, "node_modules/openclaw/bin/openclaw.js").exists()}")
+                log("   lib/node_modules/: ${File(baseDir, "lib/node_modules/openclaw/bin/openclaw.js").exists()}")
+                log("   ls baseDir: ${baseDir.listFiles()?.joinToString { it.name } ?: "empty"}")
+                
                 if (!isOpenClawInstalled) {
                     _progress.value = _progress.value.copy(
                         step = "Installing OpenClaw (few minutes)...",
@@ -160,6 +173,12 @@ class BootstrapManager(private val context: Context) {
                     }
 
                     if (exit != 0) throw Exception("npm install openclaw failed (exit: $exit)")
+                    // Check where it was installed
+                    log("-> Post-install check:")
+                    log("   node_modules/: ${File(baseDir, "node_modules/openclaw/bin/openclaw.js").exists()}")
+                    log("   lib/node_modules/: ${File(baseDir, "lib/node_modules/openclaw/bin/openclaw.js").exists()}")
+                    log("   ls baseDir: ${baseDir.listFiles()?.joinToString { it.name } ?: "empty"}")
+                    log("   openclawMain: ${openclawMain.absolutePath} exists=${openclawMain.exists()}")
                     log("OK OpenClaw installed")
                 } else {
                     log("OK OpenClaw already installed")

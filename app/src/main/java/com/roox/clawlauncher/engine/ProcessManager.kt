@@ -38,7 +38,15 @@ class ProcessManager(private val context: Context, private val configManager: Co
     private val baseDir: File get() = File(context.filesDir, "openclaw")
     private val nodeBin: File get() = File(context.applicationInfo.nativeLibraryDir, "libnode.so")
     private val nativeLibDir: String get() = context.applicationInfo.nativeLibraryDir
-    private val openclawMain: File get() = File(baseDir, "node_modules/openclaw/bin/openclaw.js")
+    private val openclawMain: File get() {
+        val path1 = File(baseDir, "node_modules/openclaw/bin/openclaw.js")
+        val path2 = File(baseDir, "lib/node_modules/openclaw/bin/openclaw.js")
+        return when {
+            path1.exists() -> path1
+            path2.exists() -> path2
+            else -> path1
+        }
+    }
 
     val isInstalled: Boolean get() = nodeBin.exists() && openclawMain.exists()
 
