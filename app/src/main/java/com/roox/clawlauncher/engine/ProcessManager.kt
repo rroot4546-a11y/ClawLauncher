@@ -49,7 +49,7 @@ class ProcessManager(private val context: Context, private val configManager: Co
         return if (path != null) File(path) else null
     }
 
-    val isInstalled: Boolean get() = nodeBin.exists() && openclawMain != null
+    val isInstalled: Boolean get() = nodeBin.exists() && (openclawMain != null || bootstrapManager.isOpenClawInstalled)
 
     init {
         checkState()
