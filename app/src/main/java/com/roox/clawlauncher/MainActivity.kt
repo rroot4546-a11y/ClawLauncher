@@ -50,7 +50,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Recompose when returning from permission settings
+        // Refresh state when returning to the app (e.g., from browser or permission settings)
+        processManager.refreshState()
     }
 
     @Composable
@@ -70,6 +71,11 @@ class MainActivity : ComponentActivity() {
 
         when (currentScreen) {
             "main" -> {
+                // Force refresh when returning to main screen
+                LaunchedEffect(Unit) {
+                    processManager.refreshState()
+                }
+
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -108,6 +114,7 @@ class MainActivity : ComponentActivity() {
                                     processManager.stop()
                                     configManager.baseDir.deleteRecursively()
                                     configManager.baseDir.mkdirs()
+                                    processManager.refreshState()
                                     Toast.makeText(this@MainActivity, "App data reset. Restart the app.", Toast.LENGTH_LONG).show()
                                 }
                             }
@@ -135,7 +142,11 @@ class MainActivity : ComponentActivity() {
                 isOpenClawInstalled = bootstrapManager.isOpenClawInstalled,
                 onStartSetup = { lifecycleScope.launch { bootstrapManager.runSetup() } },
                 onUpdate = { lifecycleScope.launch { bootstrapManager.updateOpenClaw() } },
-                onBack = { currentScreen = "main" }
+                onBack = {
+                    // Force re-check when returning from setup
+                    processManager.refreshState()
+                    currentScreen = "main"
+                }
             )
             "settings" -> SettingsScreen(
                 configManager = configManager,

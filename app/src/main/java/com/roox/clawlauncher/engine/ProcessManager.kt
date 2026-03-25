@@ -24,7 +24,9 @@ data class ServerStatus(
     val uptime: Long = 0L,
     val port: Int = 3000,
     val version: String = "unknown",
-    val logs: String = ""
+    val logs: String = "",
+    val diskUsage: String = "",
+    val openclawVersion: String? = null
 )
 
 class ProcessManager(private val context: Context, private val configManager: ConfigManager) {
@@ -38,27 +40,60 @@ class ProcessManager(private val context: Context, private val configManager: Co
     private val baseDir: File get() = File(context.filesDir, "openclaw")
     private val nodeBin: File get() = File(context.applicationInfo.nativeLibraryDir, "libnode.so")
     private val nativeLibDir: String get() = context.applicationInfo.nativeLibraryDir
-    private val openclawMain: File get() {
-        val path1 = File(baseDir, "node_modules/openclaw/bin/openclaw.js")
-        val path2 = File(baseDir, "lib/node_modules/openclaw/bin/openclaw.js")
-        return when {
-            path1.exists() -> path1
-            path2.exists() -> path2
-            else -> path1
-        }
+
+    // Use BootstrapManager's recursive search logic for finding openclaw.js
+    private val bootstrapManager by lazy { BootstrapManager(context) }
+
+    private val openclawMain: File? get() {
+        val path = bootstrapManager.getOpenclawMainPath()
+        return if (path != null) File(path) else null
     }
 
-    val isInstalled: Boolean get() = nodeBin.exists() && openclawMain.exists()
+    val isInstalled: Boolean get() = nodeBin.exists() && openclawMain != null
 
     init {
         checkState()
     }
 
     private fun checkState() {
-        _status.value = if (isInstalled) {
-            ServerStatus(state = ServerState.STOPPED, message = "Ready to start")
+        if (isInstalled) {
+            val version = bootstrapManager.getOpenClawVersion()
+            val diskUsage = formatDiskUsage(bootstrapManager.getDiskUsage())
+            _status.value = ServerStatus(
+                state = ServerState.STOPPED,
+                message = "Ready to start",
+                openclawVersion = version,
+                diskUsage = diskUsage
+            )
         } else {
-            ServerStatus(state = ServerState.NOT_INSTALLED, message = "Run Setup first")
+            _status.value = ServerStatus(state = ServerState.NOT_INSTALLED, message = "Run Setup first")
+        }
+    }
+
+    /**
+     * Public method to force re-check installation state.
+     * Call this after setup completes or when navigating back to control panel.
+     */
+    fun refreshState() {
+        if (process?.isAlive == true) {
+            // Don't change state if process is running
+            val version = bootstrapManager.getOpenClawVersion()
+            val diskUsage = formatDiskUsage(bootstrapManager.getDiskUsage())
+            _status.value = _status.value.copy(
+                openclawVersion = version,
+                diskUsage = diskUsage
+            )
+            return
+        }
+        checkState()
+    }
+
+    private fun formatDiskUsage(bytes: Long): String {
+        return when {
+            bytes < 1024 -> "${bytes} B"
+            bytes < 1024 * 1024 -> "${"%.1f".format(bytes.toDouble() / 1024)} KB"
+            bytes < 1024L * 1024 * 1024 -> "${"%.1f".format(bytes.toDouble() / (1024 * 1024))} MB"
+            else -> "${"%.2f".format(bytes.toDouble() / (1024L * 1024 * 1024))} GB"
         }
     }
 
@@ -99,6 +134,12 @@ class ProcessManager(private val context: Context, private val configManager: Co
             return
         }
 
+        val mainFile = openclawMain
+        if (mainFile == null || !mainFile.exists()) {
+            _status.value = ServerStatus(state = ServerState.NOT_INSTALLED, message = "OpenClaw binary not found. Run Setup.")
+            return
+        }
+
         // Save config before starting
         configManager.saveConfig()
 
@@ -113,13 +154,14 @@ class ProcessManager(private val context: Context, private val configManager: Co
 
                 val cmd = listOf(
                     nodeBin.absolutePath,
-                    openclawMain.absolutePath,
+                    mainFile.absolutePath,
                     "gateway", "start", "--foreground"
                 )
 
                 appendLog("→ Command: ${cmd.joinToString(" ")}")
                 appendLog("→ Port: $port")
                 appendLog("→ Home: ${baseDir.absolutePath}")
+                appendLog("→ OpenClaw: ${mainFile.absolutePath}")
 
                 val pb = ProcessBuilder(cmd)
                 pb.directory(baseDir)
@@ -143,6 +185,7 @@ class ProcessManager(private val context: Context, private val configManager: Co
 
                 // Wait a bit and check if process is alive
                 var started = false
+                val version = bootstrapManager.getOpenClawVersion()
                 for (i in 1..30) { // Wait up to 15 seconds
                     delay(500)
 
@@ -173,7 +216,9 @@ class ProcessManager(private val context: Context, private val configManager: Co
                         message = "OpenClaw is Live",
                         port = port,
                         uptime = 0,
-                        logs = logBuffer.toString()
+                        logs = logBuffer.toString(),
+                        openclawVersion = version,
+                        diskUsage = formatDiskUsage(bootstrapManager.getDiskUsage())
                     )
 
                     // Continue reading logs in background
@@ -227,7 +272,9 @@ class ProcessManager(private val context: Context, private val configManager: Co
                 _status.value = ServerStatus(
                     state = ServerState.STOPPED,
                     message = "Stopped",
-                    logs = logBuffer.toString()
+                    logs = logBuffer.toString(),
+                    openclawVersion = bootstrapManager.getOpenClawVersion(),
+                    diskUsage = formatDiskUsage(bootstrapManager.getDiskUsage())
                 )
                 // Stop foreground service
                 context.stopService(Intent(context, OpenClawService::class.java))
@@ -262,7 +309,10 @@ class ProcessManager(private val context: Context, private val configManager: Co
             "Node.js" to if (nodeBin.exists()) "OK (Termux)" else "Not found",
             "Node Path" to nodeBin.absolutePath,
             "Libs" to nativeLibDir,
-            "OpenClaw" to if (openclawMain.exists()) "✓ Installed" else "Not installed",
+            "OpenClaw" to if (openclawMain?.exists() == true) "✓ Installed" else "Not installed",
+            "OpenClaw Path" to (openclawMain?.absolutePath ?: "N/A"),
+            "Version" to (s.openclawVersion ?: "unknown"),
+            "Disk Usage" to s.diskUsage,
             "Base Dir" to baseDir.absolutePath,
             "Workspace" to File(baseDir, "workspace").absolutePath,
             "Architecture" to (Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"),

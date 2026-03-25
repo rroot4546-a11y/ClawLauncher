@@ -1,6 +1,7 @@
 package com.roox.clawlauncher.ui.screens
 
 import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -13,6 +14,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -68,10 +70,33 @@ fun ControlPanelScreen(
         // Status
         StatusIndicator(status)
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Info card (version, disk, port)
+        if (status.state != ServerState.NOT_INSTALLED) {
+            InfoCard(status)
+            Spacer(modifier = Modifier.height(16.dp))
+        } else {
+            Spacer(modifier = Modifier.height(8.dp))
+        }
 
         // Main action button
         MainActionButton(status, onStart, onGoToOpenClaw, onSetup)
+
+        // Open Chat button when running
+        if (status.state == ServerState.RUNNING) {
+            Spacer(modifier = Modifier.height(10.dp))
+            OutlinedButton(
+                onClick = onGoToOpenClaw,
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, ClawBlue)
+            ) {
+                Icon(Icons.Default.Chat, contentDescription = null, tint = ClawBlue)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Open Chat in Browser", fontSize = 14.sp, color = ClawBlue, fontWeight = FontWeight.Medium)
+            }
+        }
 
         Spacer(modifier = Modifier.height(20.dp))
 
@@ -102,7 +127,7 @@ fun ControlPanelScreen(
 
         Spacer(modifier = Modifier.weight(1f))
 
-        // Config info at bottom
+        // Running indicator at bottom
         if (status.state == ServerState.RUNNING) {
             Surface(
                 shape = RoundedCornerShape(10.dp),
@@ -115,6 +140,16 @@ fun ControlPanelScreen(
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text("Running on port ${status.port}", fontSize = 12.sp, color = ClawGreen)
+                    Spacer(modifier = Modifier.weight(1f))
+                    if (status.uptime > 0) {
+                        val secs = status.uptime
+                        val uptimeText = when {
+                            secs < 60 -> "${secs}s"
+                            secs < 3600 -> "${secs / 60}m ${secs % 60}s"
+                            else -> "${secs / 3600}h ${(secs % 3600) / 60}m"
+                        }
+                        Text("⏱ $uptimeText", fontSize = 11.sp, color = ClawGreen.copy(alpha = 0.7f))
+                    }
                 }
             }
             Spacer(modifier = Modifier.height(8.dp))
@@ -129,12 +164,52 @@ fun ControlPanelScreen(
 }
 
 @Composable
+fun InfoCard(status: ServerStatus) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = ClawCardBg,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                InfoItem(label = "Version", value = status.openclawVersion ?: "—")
+                InfoItem(label = "Port", value = status.port.toString())
+                InfoItem(label = "Disk", value = status.diskUsage.ifBlank { "—" })
+            }
+        }
+    }
+}
+
+@Composable
+fun InfoItem(label: String, value: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            label,
+            fontSize = 10.sp,
+            color = ClawTextSecondary,
+            fontWeight = FontWeight.Medium
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            value,
+            fontSize = 13.sp,
+            color = ClawTextPrimary,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = FontFamily.Monospace
+        )
+    }
+}
+
+@Composable
 fun StatusIndicator(status: ServerStatus) {
     val (dotColor, text) = when (status.state) {
         ServerState.RUNNING -> ClawGreen to "OpenClaw is Live"
         ServerState.STARTING -> ClawYellow to "Starting..."
         ServerState.STOPPING -> ClawYellow to "Stopping..."
-        ServerState.STOPPED -> ClawRed to "Not Running"
+        ServerState.STOPPED -> ClawGreen to "Ready to Start"
         ServerState.ERROR -> ClawRed to "Error"
         ServerState.NOT_INSTALLED -> ClawOrange to "Setup Required"
     }
@@ -154,7 +229,19 @@ fun MainActionButton(
     onSetup: () -> Unit
 ) {
     when (status.state) {
-        ServerState.STOPPED, ServerState.ERROR -> {
+        ServerState.STOPPED -> {
+            Button(
+                onClick = onStart,
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = ClawGreen)
+            ) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Start OpenClaw", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+        ServerState.ERROR -> {
             Button(
                 onClick = onStart,
                 modifier = Modifier.fillMaxWidth().height(56.dp),
@@ -163,7 +250,7 @@ fun MainActionButton(
             ) {
                 Icon(Icons.Default.PlayArrow, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Start OpenClaw", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Text("Retry Start", fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
         }
         ServerState.STARTING -> {

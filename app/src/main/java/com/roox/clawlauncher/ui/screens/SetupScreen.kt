@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.roox.clawlauncher.engine.SetupProgress
@@ -118,7 +119,28 @@ fun SetupScreen(
                 CircularProgressIndicator(color = ClawRed, modifier = Modifier.size(56.dp), strokeWidth = 4.dp)
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(progress.step, fontSize = 15.sp, color = ClawTextPrimary, textAlign = TextAlign.Center)
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Current npm activity line
+                if (progress.npmLine.isNotBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = ClawCardBgLight,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            progress.npmLine,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = ClawBlue,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
                 LinearProgressIndicator(
                     progress = { animatedProgress },
                     modifier = Modifier.fillMaxWidth().height(8.dp),
@@ -132,7 +154,7 @@ fun SetupScreen(
                 // Live log output
                 if (progress.log.isNotBlank()) {
                     Surface(
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 250.dp),
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp),
                         shape = RoundedCornerShape(10.dp),
                         color = ClawCardBg
                     ) {
@@ -143,9 +165,14 @@ fun SetupScreen(
                         ) {
                             progress.log.lines().forEach { line ->
                                 val color = when {
-                                    line.startsWith("✓") -> ClawGreen
-                                    line.startsWith("❌") -> ClawRed
-                                    line.startsWith("→") -> ClawBlue
+                                    line.trimStart().startsWith("✓") || line.trimStart().startsWith("OK") -> ClawGreen
+                                    line.trimStart().startsWith("❌") || line.trimStart().startsWith("ERROR") -> ClawRed
+                                    line.trimStart().startsWith("→") -> ClawBlue
+                                    line.trimStart().startsWith("⚠") -> ClawYellow
+                                    line.trimStart().startsWith("📦") || line.trimStart().startsWith("📥") -> ClawOrange
+                                    line.contains("npm warn") || line.contains("WARN") -> ClawYellow
+                                    line.contains("npm error") || line.contains("ERR!") -> ClawRed
+                                    line.contains("added") && line.contains("package") -> ClawGreen
                                     else -> ClawTextSecondary
                                 }
                                 Text(line, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = color)
@@ -167,7 +194,32 @@ fun SetupScreen(
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = ClawGreen)
                 ) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text("Back to Control Panel", fontWeight = FontWeight.Bold)
+                }
+
+                // Show log even after completion for reference
+                if (progress.log.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Install Log", fontSize = 12.sp, color = ClawTextSecondary)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 200.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        color = ClawCardBg
+                    ) {
+                        Column(modifier = Modifier.verticalScroll(logScrollState).padding(10.dp)) {
+                            progress.log.lines().takeLast(30).forEach { line ->
+                                val color = when {
+                                    line.trimStart().startsWith("✓") || line.trimStart().startsWith("OK") -> ClawGreen
+                                    line.trimStart().startsWith("❌") -> ClawRed
+                                    else -> ClawTextSecondary
+                                }
+                                Text(line, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = color)
+                            }
+                        }
+                    }
                 }
 
             } else if (progress.error != null) {
