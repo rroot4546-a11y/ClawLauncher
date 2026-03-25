@@ -10,6 +10,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStreamReader
 import java.util.concurrent.TimeUnit
+import java.util.zip.ZipInputStream
 
 data class SetupProgress(
     val isRunning: Boolean = false,
@@ -92,13 +93,13 @@ class BootstrapManager(private val context: Context) {
                 log("OK Node.js $nodeVer working!")
                 _progress.value = _progress.value.copy(progress = 0.25f)
 
-                // Step 2: Extract npm from assets
+                // Step 2: Extract npm from ZIP asset
                 if (!isNpmInstalled) {
                     _progress.value = _progress.value.copy(step = "Setting up npm...", progress = 0.30f)
-                    log("-> Extracting npm from assets...")
+                    log("-> Extracting npm from npm.zip...")
                     npmDir.mkdirs()
-                    extractAssetsRecursive("npm", npmDir)
-                    log("OK npm extracted")
+                    extractZipAsset("npm.zip", npmDir)
+                    log("OK npm extracted (${npmDir.listFiles()?.size ?: 0} top-level items)")
                 } else {
                     log("OK npm already installed")
                 }
@@ -184,27 +185,33 @@ class BootstrapManager(private val context: Context) {
         }
     }
 
-    // Extract assets/[path] recursively to destDir
-    private fun extractAssetsRecursive(assetPath: String, destDir: File) {
+    // Extract a ZIP file from assets to destDir
+    private fun extractZipAsset(assetName: String, destDir: File) {
         var count = 0
-        fun extract(aPath: String, dDir: File) {
-            val list = context.assets.list(aPath) ?: return
-            if (list.isEmpty()) {
-                dDir.parentFile?.mkdirs()
-                context.assets.open(aPath).use { inp ->
-                    FileOutputStream(dDir).use { out -> inp.copyTo(out) }
+        context.assets.open(assetName).use { input ->
+            ZipInputStream(input).use { zip ->
+                var entry = zip.nextEntry
+                while (entry != null) {
+                    val outFile = File(destDir, entry.name)
+                    if (entry.isDirectory) {
+                        outFile.mkdirs()
+                    } else {
+                        outFile.parentFile?.mkdirs()
+                        FileOutputStream(outFile).use { out ->
+                            zip.copyTo(out)
+                        }
+                        // Make scripts executable
+                        if (outFile.name.endsWith(".js") || outFile.name.endsWith(".sh") || !outFile.name.contains(".")) {
+                            outFile.setExecutable(true, false)
+                        }
+                        count++
+                    }
+                    zip.closeEntry()
+                    entry = zip.nextEntry
                 }
-                if (dDir.name.endsWith(".js") || dDir.name.endsWith(".sh") || !dDir.name.contains(".")) {
-                    dDir.setExecutable(true, false)
-                }
-                count++
-            } else {
-                dDir.mkdirs()
-                for (item in list) extract("$aPath/$item", File(dDir, item))
             }
         }
-        extract(assetPath, destDir)
-        log("-> Extracted $count files")
+        log("-> Extracted $count files from $assetName")
     }
 
     // Environment: LD_LIBRARY_PATH points to nativeLibraryDir where all .so files live

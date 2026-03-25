@@ -156,13 +156,16 @@ jobs:
           echo "=== Final jniLibs ==="
           ls -lh "$JNIDIR"/
 
-      - name: Bundle npm as assets
+      - name: Bundle npm as ZIP asset
         run: |
           NPM_DIR=$(find work/extracted -path "*/lib/node_modules/npm" -type d | head -1)
           if [ -n "$NPM_DIR" ]; then
-            mkdir -p app/src/main/assets/npm
-            cp -r "$NPM_DIR"/* app/src/main/assets/npm/
-            echo "✅ npm: $(du -sh app/src/main/assets/npm/ | awk '{print $1}')"
+            mkdir -p app/src/main/assets
+            cd "$NPM_DIR"
+            zip -rq /tmp/npm-bundle.zip .
+            cp /tmp/npm-bundle.zip $GITHUB_WORKSPACE/app/src/main/assets/npm.zip
+            echo "✅ npm.zip: $(ls -lh $GITHUB_WORKSPACE/app/src/main/assets/npm.zip | awk '{print $5}')"
+            echo "   Files: $(unzip -l /tmp/npm-bundle.zip | tail -1)"
           fi
 
       - name: Install Gradle wrapper
