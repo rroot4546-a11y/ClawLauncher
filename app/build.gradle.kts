@@ -50,11 +50,10 @@ android {
     }
     packaging {
         resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
-    }
-
-    // Don't compress assets (node binary + libs)
-    androidResources {
-        noCompress += listOf("so")
+        // Extract native libs to disk (needed for node execution)
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 }
 

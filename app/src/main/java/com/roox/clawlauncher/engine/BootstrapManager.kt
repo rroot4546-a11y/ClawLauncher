@@ -20,26 +20,31 @@ data class SetupProgress(
     val log: String = ""
 )
 
-// Bootstrap manager that extracts Termux-compiled Node.js from APK assets.
-// Termux Node.js is compiled against Android Bionic libc (not glibc),
-// so it runs natively on Android without root or special permissions.
-//
-// Asset layout (bundled during CI):
-//   assets/node-android/bin/node       - Termux node binary (aarch64)
-//   assets/node-android/lib/           - shared libraries (libc++, openssl, etc)
-//   assets/node-android/lib/node_modules/npm/ - npm package manager
+// Node.js binary lives in nativeLibraryDir as libnode.so
+// This is the ONLY directory Android allows executing binaries from.
+// Shared libs (libc++, openssl, zlib) are also there.
+// npm is extracted from APK assets to app data.
 class BootstrapManager(private val context: Context) {
     private val _progress = MutableStateFlow(SetupProgress())
     val progress: StateFlow<SetupProgress> = _progress
 
     private val baseDir: File get() = File(context.filesDir, "openclaw")
-    val nodeBin: File get() = File(baseDir, "android-node/bin/node")
-    private val nodeLibDir: File get() = File(baseDir, "android-node/lib")
-    private val npmCli: File get() = File(baseDir, "android-node/lib/node_modules/npm/bin/npm-cli.js")
+
+    // Node binary = libnode.so in nativeLibraryDir (executable!)
+    val nodeBin: File get() = File(context.applicationInfo.nativeLibraryDir, "libnode.so")
+
+    // Shared libraries directory (same as node binary)
+    private val nativeLibDir: String get() = context.applicationInfo.nativeLibraryDir
+
+    // npm extracted from assets
+    private val npmDir: File get() = File(baseDir, "npm")
+    private val npmCli: File get() = File(npmDir, "bin/npm-cli.js")
+
+    // OpenClaw installed via npm
     private val nodeModulesDir: File get() = File(baseDir, "node_modules")
     private val openclawMain: File get() = File(nodeModulesDir, "openclaw/bin/openclaw.js")
 
-    val isNodeInstalled: Boolean get() = nodeBin.exists() && nodeBin.canExecute()
+    val isNodeInstalled: Boolean get() = nodeBin.exists()
     val isNpmInstalled: Boolean get() = npmCli.exists()
     val isOpenClawInstalled: Boolean get() = openclawMain.exists()
 
@@ -48,7 +53,7 @@ class BootstrapManager(private val context: Context) {
     }
 
     suspend fun runSetup() {
-        _progress.value = SetupProgress(isRunning = true, step = "Preparing environment...", progress = 0.02f)
+        _progress.value = SetupProgress(isRunning = true, step = "Preparing...", progress = 0.02f)
 
         withContext(Dispatchers.IO) {
             try {
@@ -56,74 +61,58 @@ class BootstrapManager(private val context: Context) {
                 File(baseDir, "workspace").mkdirs()
                 File(baseDir, "tmp").mkdirs()
 
-                // Step 1: Extract Node.js from APK assets
-                if (!isNodeInstalled) {
-                    _progress.value = _progress.value.copy(step = "Extracting Node.js for Android...", progress = 0.05f)
-                    log("→ Extracting Termux Node.js from assets...")
+                // Step 1: Verify Node.js binary in nativeLibraryDir
+                _progress.value = _progress.value.copy(step = "Checking Node.js...", progress = 0.05f)
+                log("-> Node binary path: ${nodeBin.absolutePath}")
+                log("-> nativeLibraryDir: $nativeLibDir")
+                log("-> Exists: ${nodeBin.exists()}")
 
-                    val destDir = File(baseDir, "android-node")
-                    destDir.mkdirs()
-
-                    extractAssetsRecursive("node-android", destDir) { count ->
-                        if (count % 50 == 0) {
-                            _progress.value = _progress.value.copy(
-                                step = "Extracting... ($count files)",
-                                progress = 0.05f + minOf(count, 500).toFloat() / 500f * 0.25f
-                            )
-                        }
-                    }
-
-                    // Make node executable
-                    nodeBin.setExecutable(true, false)
-
-                    // Make all files in bin/ executable
-                    File(destDir, "bin").listFiles()?.forEach { it.setExecutable(true, false) }
-
-                    log("✓ Node.js extracted to ${destDir.absolutePath}")
-                    log("→ Node binary: ${nodeBin.absolutePath}")
-                    log("→ Exists: ${nodeBin.exists()}, Executable: ${nodeBin.canExecute()}")
-                    log("→ Size: ${nodeBin.length() / 1024}KB")
-                } else {
-                    log("✓ Node.js already installed")
+                if (!nodeBin.exists()) {
+                    throw Exception("Node.js (libnode.so) not found in native libs. Reinstall the APK.")
                 }
 
-                _progress.value = _progress.value.copy(progress = 0.35f)
+                // List all native libs
+                val nativeDir = File(nativeLibDir)
+                log("-> Native libs: ${nativeDir.listFiles()?.joinToString { it.name } ?: "none"}")
 
-                // Step 2: Verify Node.js works
-                _progress.value = _progress.value.copy(step = "Verifying Node.js...", progress = 0.38f)
+                // Test node execution
+                log("-> Testing node --version...")
                 val env = buildEnv()
-                val nodeVer = runCommandWithEnvOutput(env, nodeBin.absolutePath, "--version")
-                log("→ Node.js version output: $nodeVer")
+                val nodeVer = runCmdOutput(env, nodeBin.absolutePath, "--version")
+                log("-> Result: $nodeVer")
 
                 if (!nodeVer.startsWith("v")) {
-                    // Try to get more info about why it failed
-                    val fileInfo = runCommandOutput("file", nodeBin.absolutePath)
-                    log("→ File info: $fileInfo")
-                    val lsInfo = runCommandOutput("ls", "-la", nodeBin.absolutePath)
-                    log("→ ls: $lsInfo")
-                    throw Exception("Node.js failed to execute. Output: $nodeVer")
+                    throw Exception("Node.js failed to start. Output: $nodeVer")
                 }
 
-                log("✓ Node.js $nodeVer working!")
+                log("OK Node.js $nodeVer working!")
+                _progress.value = _progress.value.copy(progress = 0.25f)
 
-                // Step 3: Verify npm
-                _progress.value = _progress.value.copy(step = "Verifying npm...", progress = 0.42f)
-                if (isNpmInstalled) {
-                    val npmVer = runCommandWithEnvOutput(env, nodeBin.absolutePath, npmCli.absolutePath, "--version")
-                    log("✓ npm $npmVer")
+                // Step 2: Extract npm from assets
+                if (!isNpmInstalled) {
+                    _progress.value = _progress.value.copy(step = "Setting up npm...", progress = 0.30f)
+                    log("-> Extracting npm from assets...")
+                    npmDir.mkdirs()
+                    extractAssetsRecursive("npm", npmDir)
+                    log("OK npm extracted")
                 } else {
-                    log("⚠ npm not found — will try to install openclaw directly")
+                    log("OK npm already installed")
                 }
 
-                // Step 4: Install OpenClaw
+                // Verify npm
+                val npmVer = runCmdOutput(env, nodeBin.absolutePath, npmCli.absolutePath, "--version")
+                log("-> npm version: $npmVer")
+                _progress.value = _progress.value.copy(progress = 0.40f)
+
+                // Step 3: Install OpenClaw
                 if (!isOpenClawInstalled) {
                     _progress.value = _progress.value.copy(
                         step = "Installing OpenClaw (few minutes)...",
-                        progress = 0.50f
+                        progress = 0.45f
                     )
-                    log("→ Installing openclaw via npm...")
+                    log("-> npm install openclaw...")
 
-                    val installExit = runCommandWithEnv(
+                    val exit = runCmdLines(
                         env, baseDir,
                         nodeBin.absolutePath, npmCli.absolutePath,
                         "install", "openclaw",
@@ -132,43 +121,35 @@ class BootstrapManager(private val context: Context) {
                     ) { line ->
                         log("  $line")
                         if (line.contains("added")) {
-                            _progress.value = _progress.value.copy(
-                                step = "Finalizing...",
-                                progress = 0.88f
-                            )
+                            _progress.value = _progress.value.copy(step = "Finalizing...", progress = 0.85f)
                         }
                     }
 
-                    if (installExit != 0) {
-                        throw Exception("npm install openclaw failed (exit: $installExit)")
-                    }
-                    log("✓ OpenClaw installed")
+                    if (exit != 0) throw Exception("npm install openclaw failed (exit: $exit)")
+                    log("OK OpenClaw installed")
                 } else {
-                    log("✓ OpenClaw already installed")
+                    log("OK OpenClaw already installed")
                 }
 
-                // Step 5: Workspace
-                _progress.value = _progress.value.copy(step = "Setting up workspace...", progress = 0.93f)
-                val workspace = File(baseDir, "workspace")
-                workspace.mkdirs()
-                createIfMissing(File(workspace, "AGENTS.md"), "# AGENTS.md\n\nYour OpenClaw workspace.\n")
-                createIfMissing(File(workspace, "SOUL.md"), "# SOUL.md\n\nAI assistant on Android.\n")
-                log("✓ Workspace ready")
+                // Step 4: Workspace
+                _progress.value = _progress.value.copy(step = "Setting up workspace...", progress = 0.92f)
+                val ws = File(baseDir, "workspace")
+                ws.mkdirs()
+                mkfile(File(ws, "AGENTS.md"), "# AGENTS.md\n\nOpenClaw workspace.\n")
+                mkfile(File(ws, "SOUL.md"), "# SOUL.md\n\nAI assistant on Android.\n")
+                log("OK Workspace ready")
 
                 // Done!
                 _progress.value = SetupProgress(
-                    isRunning = false,
-                    step = "Setup complete! 🦀",
-                    progress = 1f,
+                    isRunning = false, step = "Setup complete!", progress = 1f,
                     isComplete = true,
-                    log = _progress.value.log + "✅ All done! Go back and start OpenClaw.\n"
+                    log = _progress.value.log + "DONE! Go back and start OpenClaw.\n"
                 )
 
             } catch (e: Exception) {
-                log("❌ Error: ${e.message}")
+                log("ERROR: ${e.message}")
                 _progress.value = _progress.value.copy(
-                    isRunning = false,
-                    step = "Setup failed",
+                    isRunning = false, step = "Setup failed",
                     error = e.message ?: "Unknown error"
                 )
             }
@@ -180,80 +161,61 @@ class BootstrapManager(private val context: Context) {
         withContext(Dispatchers.IO) {
             try {
                 val env = buildEnv()
-                log("→ Updating openclaw...")
-                val exit = runCommandWithEnv(
+                log("-> Updating openclaw...")
+                val exit = runCmdLines(
                     env, baseDir,
                     nodeBin.absolutePath, npmCli.absolutePath,
                     "update", "openclaw", "--prefix", baseDir.absolutePath
                 ) { log("  $it") }
                 if (exit != 0) throw Exception("Update failed (exit: $exit)")
-                log("✓ Done")
-                _progress.value = SetupProgress(isRunning = false, step = "Updated!", progress = 1f, isComplete = true, log = _progress.value.log)
+                log("OK Done")
+                _progress.value = SetupProgress(
+                    isRunning = false, step = "Updated!", progress = 1f,
+                    isComplete = true, log = _progress.value.log
+                )
             } catch (e: Exception) {
-                log("❌ ${e.message}")
+                log("ERROR: ${e.message}")
                 _progress.value = _progress.value.copy(isRunning = false, error = e.message)
             }
         }
     }
 
-    // Recursively extract assets to a destination directory.
-    private fun extractAssetsRecursive(assetPath: String, destDir: File, onFile: (Int) -> Unit = {}) {
+    // Extract assets/[path] recursively to destDir
+    private fun extractAssetsRecursive(assetPath: String, destDir: File) {
         var count = 0
-
         fun extract(aPath: String, dDir: File) {
-            val assets = context.assets
-            val list = assets.list(aPath) ?: return
-
+            val list = context.assets.list(aPath) ?: return
             if (list.isEmpty()) {
-                // It's a file
                 dDir.parentFile?.mkdirs()
-                assets.open(aPath).use { input ->
-                    FileOutputStream(dDir).use { output ->
-                        input.copyTo(output)
-                    }
+                context.assets.open(aPath).use { inp ->
+                    FileOutputStream(dDir).use { out -> inp.copyTo(out) }
+                }
+                if (dDir.name.endsWith(".js") || dDir.name.endsWith(".sh") || !dDir.name.contains(".")) {
+                    dDir.setExecutable(true, false)
                 }
                 count++
-                onFile(count)
             } else {
-                // Directory
                 dDir.mkdirs()
-                for (item in list) {
-                    extract("$aPath/$item", File(dDir, item))
-                }
+                for (item in list) extract("$aPath/$item", File(dDir, item))
             }
         }
-
         extract(assetPath, destDir)
-        log("✓ Extracted $count files from assets")
+        log("-> Extracted $count files")
     }
 
-    // Build environment variables for running node.
-    // Sets LD_LIBRARY_PATH to bundled Termux libs.
-    private fun buildEnv(): Map<String, String> = mapOf(
+    // Environment: LD_LIBRARY_PATH points to nativeLibraryDir for shared libs
+    fun buildEnv(): Map<String, String> = mapOf(
         "HOME" to baseDir.absolutePath,
-        "PATH" to "${File(baseDir, "android-node/bin").absolutePath}:/system/bin:/system/xbin",
-        "LD_LIBRARY_PATH" to nodeLibDir.absolutePath,
+        "PATH" to "$nativeLibDir:/system/bin:/system/xbin",
+        "LD_LIBRARY_PATH" to nativeLibDir,
         "NODE_ENV" to "production",
         "TERM" to "xterm-256color",
         "TMPDIR" to File(baseDir, "tmp").apply { mkdirs() }.absolutePath,
         "npm_config_cache" to File(baseDir, ".npm-cache").apply { mkdirs() }.absolutePath,
-        "npm_config_prefix" to baseDir.absolutePath,
-        "npm_config_globalconfig" to File(baseDir, "npmrc").absolutePath,
-        "npm_config_userconfig" to File(baseDir, "npmrc").absolutePath
+        "npm_config_prefix" to baseDir.absolutePath
     )
 
-    private fun runCommandOutput(vararg cmd: String): String {
-        return try {
-            val pb = ProcessBuilder(*cmd)
-            pb.redirectErrorStream(true)
-            val proc = pb.start()
-            val out = proc.inputStream.bufferedReader().readText().trim()
-            proc.waitFor(30, TimeUnit.SECONDS)
-            out
-        } catch (e: Exception) { "Error: ${e.message}" }
-    }
-
-    private fun runCommandWithEnvOutput(env: Map<String, String>, vararg cmd: String): String {
+    private fun runCmdOutput(env: Map<String, String>, vararg cmd: String): String {
         return try {
             val pb = ProcessBuilder(*cmd)
             pb.directory(baseDir)
@@ -267,7 +229,7 @@ class BootstrapManager(private val context: Context) {
         } catch (e: Exception) { "Error: ${e.message}" }
     }
 
-    private fun runCommandWithEnv(env: Map<String, String>, workDir: File, vararg cmd: String, onLine: (String) -> Unit = {}): Int {
+    private fun runCmdLines(env: Map<String, String>, workDir: File, vararg cmd: String, onLine: (String) -> Unit = {}): Int {
         val pb = ProcessBuilder(*cmd)
         pb.directory(workDir)
         pb.environment().clear()
@@ -280,7 +242,7 @@ class BootstrapManager(private val context: Context) {
         return proc.waitFor()
     }
 
-    private fun createIfMissing(file: File, content: String) {
-        if (!file.exists()) { file.parentFile?.mkdirs(); file.writeText(content) }
+    private fun mkfile(f: File, content: String) {
+        if (!f.exists()) { f.parentFile?.mkdirs(); f.writeText(content) }
     }
 }
