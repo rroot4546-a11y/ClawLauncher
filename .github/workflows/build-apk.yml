@@ -24,7 +24,7 @@ jobs:
         run: |
           set -e
           MIRROR="https://packages-cf.termux.dev/apt/termux-main"
-          PKGS="nodejs libc++ openssl zlib c-ares libicu libsqlite"
+          PKGS="nodejs npm libc++ openssl zlib c-ares libicu libsqlite"
           
           mkdir -p work && cd work
           curl -sL "$MIRROR/dists/stable/main/binary-aarch64/Packages.gz" | gunzip > Packages
