@@ -34,7 +34,8 @@ jobs:
           # Download and extract all packages
           mkdir -p extracted
           for pkg in $PKGS; do
-            url=$(awk "/^Package: ${pkg}\$/,/^\$/" Packages | grep "^Filename:" | head -1 | awk '{print $2}')
+            # Use grep+awk instead of awk regex (avoids issues with + in package names like libc++)
+            url=$(grep -A 20 "^Package: ${pkg}$" Packages | grep "^Filename:" | head -1 | awk '{print $2}')
             [ -z "$url" ] && echo "WARN: $pkg not found" && continue
             echo "📦 $pkg"
             wget -q "$MIRROR/$url" -O "${pkg}.deb"
@@ -96,17 +97,32 @@ jobs:
           NEEDED_LIBS="libz.so libcares.so libsqlite3.so libcrypto.so libssl.so libicui18n.so libicuuc.so libc++_shared.so libicudata.so"
           
           for lib in $NEEDED_LIBS; do
-            # Try exact match first
+            # Try exact match in the primary lib dir
             src="$LIBDIR/$lib"
             if [ ! -f "$src" ]; then
-              # Try finding it anywhere
+              # Search EVERYWHERE in extracted (covers different Termux package layouts)
               src=$(find extracted -name "$lib" -type f 2>/dev/null | head -1)
+            fi
+            if [ ! -f "$src" ] && [ -n "$LIBDIR" ]; then
+              # Try symlink targets — some are symlinks to versioned files
+              for candidate in "$LIBDIR/${lib}"*; do
+                [ -f "$candidate" ] && src="$candidate" && break
+              done
             fi
             if [ -f "$src" ]; then
               cp "$src" "$JNIDIR/$lib"
               echo "  ✅ $lib ($(ls -lh "$JNIDIR/$lib" | awk '{print $5}'))"
             else
-              echo "  ❌ $lib NOT FOUND"
+              echo "  ❌ $lib NOT FOUND — searching deeper..."
+              # Last resort: search by partial name
+              partial=$(echo "$lib" | sed 's/\.so$//')
+              deep=$(find extracted -name "${partial}*" -type f 2>/dev/null | head -1)
+              if [ -n "$deep" ]; then
+                cp "$deep" "$JNIDIR/$lib"
+                echo "    → found at $deep ✅"
+              else
+                echo "    → truly missing ❌"
+              fi
             fi
           done
           
