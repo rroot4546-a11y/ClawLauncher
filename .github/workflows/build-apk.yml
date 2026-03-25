@@ -74,66 +74,65 @@ jobs:
             echo "  📋 Node needs (before patching):"
             readelf -d "$NODE_BIN" | grep NEEDED | head -20
             
-            # Find the lib directory
+            # Copy ALL .so files from extracted Termux packages
+            # This catches direct deps AND transitive deps (like libc++_shared.so)
             local USR_LIB=$(find "${ARCH}-extract" -path "*/usr/lib" -type d | head -1)
             
-            # Copy shared libs and build rename map
-            # Android only extracts files matching lib*.so — no versioned names!
-            # So we rename libz.so.1 → libz_1.so and patchelf node to match
             declare -A RENAME_MAP
             
             if [ -n "$USR_LIB" ]; then
-              echo "  📚 Processing shared libraries..."
+              echo "  📚 Copying ALL shared libraries from Termux..."
               
-              # Find all .so files that node depends on
-              for needed in $(readelf -d "$NODE_BIN" | grep NEEDED | sed 's/.*\[//;s/\]//'); do
-                # Find the actual library file
-                local src=$(find "$USR_LIB" -name "$needed" -o -name "${needed}.*" 2>/dev/null | head -1)
+              # Find every .so file (including versioned ones like libz.so.1)
+              find "$USR_LIB" -maxdepth 1 \( -name "*.so" -o -name "*.so.*" \) -type f | while read src; do
+                local orig_name=$(basename "$src")
+                local android_name
                 
-                if [ -z "$src" ]; then
-                  # Try resolving the versioned name
-                  local base_name=$(echo "$needed" | sed 's/\.so\..*/\.so/')
-                  src=$(find "$USR_LIB" -name "${base_name}*" -type f 2>/dev/null | head -1)
+                if echo "$orig_name" | grep -q '\.so\.'; then
+                  # Versioned: libz.so.1 → libz_v1.so
+                  android_name=$(echo "$orig_name" | sed 's/\.so\.\(.*\)/_v\1.so/')
+                else
+                  android_name="$orig_name"
                 fi
                 
-                if [ -n "$src" ]; then
-                  # Generate Android-compatible name: replace . with _ after .so
-                  local android_name
-                  if echo "$needed" | grep -q '\.so\.'; then
-                    # versioned: libz.so.1 → libz_v1.so
-                    android_name=$(echo "$needed" | sed 's/\.so\.\(.*\)/_v\1.so/')
-                  else
-                    android_name="$needed"
-                  fi
-                  
-                  # Ensure lib prefix
-                  case "$android_name" in lib*) ;; *) android_name="lib${android_name}" ;; esac
-                  
-                  cp "$src" "$JNI_DIR/$android_name"
-                  RENAME_MAP["$needed"]="$android_name"
-                  echo "    $needed → $android_name ($(ls -lh "$JNI_DIR/$android_name" | awk '{print $5}'))"
-                else
-                  echo "    ⚠️  $needed — not found (may be system lib)"
+                # Ensure lib prefix
+                case "$android_name" in lib*) ;; *) android_name="lib${android_name}" ;; esac
+                
+                cp "$src" "$JNI_DIR/$android_name"
+                echo "    $orig_name → $android_name"
+                
+                # Track renames for patchelf
+                if [ "$orig_name" != "$android_name" ]; then
+                  echo "$orig_name=$android_name" >> /tmp/rename_map_${JNI_ARCH}.txt
                 fi
               done
             fi
             
-            # Patch node binary to use renamed libraries
+            # Copy node binary
             cp "$NODE_BIN" "$JNI_DIR/libnode.so"
             chmod 755 "$JNI_DIR/libnode.so"
             
-            for old_name in "${!RENAME_MAP[@]}"; do
-              local new_name="${RENAME_MAP[$old_name]}"
-              if [ "$old_name" != "$new_name" ]; then
+            # Patch node binary: rename all versioned NEEDED entries
+            if [ -f "/tmp/rename_map_${JNI_ARCH}.txt" ]; then
+              while IFS='=' read -r old_name new_name; do
                 echo "  🔧 patchelf: $old_name → $new_name"
-                patchelf --replace-needed "$old_name" "$new_name" "$JNI_DIR/libnode.so" 2>/dev/null || echo "    (skip)"
-              fi
-            done
+                patchelf --replace-needed "$old_name" "$new_name" "$JNI_DIR/libnode.so" 2>/dev/null || true
+              done < "/tmp/rename_map_${JNI_ARCH}.txt"
+            fi
             
-            # Also patch the interpreter if it's set to termux linker
+            # Also patch all .so libs that might reference versioned names
+            if [ -f "/tmp/rename_map_${JNI_ARCH}.txt" ]; then
+              for so_file in "$JNI_DIR"/lib*.so; do
+                [ "$so_file" = "$JNI_DIR/libnode.so" ] && continue
+                while IFS='=' read -r old_name new_name; do
+                  patchelf --replace-needed "$old_name" "$new_name" "$so_file" 2>/dev/null || true
+                done < "/tmp/rename_map_${JNI_ARCH}.txt"
+              done
+            fi
+            
             patchelf --remove-rpath "$JNI_DIR/libnode.so" 2>/dev/null || true
             
-            echo "  📋 Node needs (after patching):"
+            echo "  📋 Node NEEDED (after patching):"
             readelf -d "$JNI_DIR/libnode.so" | grep NEEDED | head -20
             
             echo "  ✅ $JNI_ARCH done!"
