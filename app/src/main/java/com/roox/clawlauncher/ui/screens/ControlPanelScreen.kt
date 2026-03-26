@@ -1,6 +1,5 @@
 package com.roox.clawlauncher.ui.screens
 
-import androidx.compose.animation.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -35,6 +34,11 @@ fun ControlPanelScreen(
     onGoToOpenClaw: () -> Unit,
     onReset: () -> Unit
 ) {
+    // Derive state values to avoid recomposition of the whole tree
+    val isRunning by remember { derivedStateOf { status.state == ServerState.RUNNING } }
+    val isNotInstalled by remember { derivedStateOf { status.state == ServerState.NOT_INSTALLED } }
+    val canStop by remember { derivedStateOf { status.state == ServerState.RUNNING || status.state == ServerState.STARTING } }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -47,14 +51,14 @@ fun ControlPanelScreen(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Surface(
-                modifier = Modifier.size(48.dp),
-                shape = CircleShape,
-                color = ClawRed.copy(alpha = 0.2f)
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(ClawRed.copy(alpha = 0.2f)),
+                contentAlignment = Alignment.Center
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text("🦀", fontSize = 24.sp)
-                }
+                Text("\uD83E\uDD80", fontSize = 24.sp)
             }
             Spacer(modifier = Modifier.width(12.dp))
             Column {
@@ -73,7 +77,7 @@ fun ControlPanelScreen(
         Spacer(modifier = Modifier.height(12.dp))
 
         // Info card (version, disk, port)
-        if (status.state != ServerState.NOT_INSTALLED) {
+        if (!isNotInstalled) {
             InfoCard(status)
             Spacer(modifier = Modifier.height(16.dp))
         } else {
@@ -84,7 +88,7 @@ fun ControlPanelScreen(
         MainActionButton(status, onStart, onGoToOpenClaw, onSetup)
 
         // Open Chat button when running
-        if (status.state == ServerState.RUNNING) {
+        if (isRunning) {
             Spacer(modifier = Modifier.height(10.dp))
             OutlinedButton(
                 onClick = onGoToOpenClaw,
@@ -116,11 +120,11 @@ fun ControlPanelScreen(
         ) {
             GridButton(
                 Modifier.weight(1f), Icons.Default.Refresh, "Restart", onRestart,
-                enabled = status.state == ServerState.RUNNING
+                enabled = isRunning
             )
             GridButton(
                 Modifier.weight(1f), Icons.Default.Stop, "Stop", onStop,
-                enabled = status.state == ServerState.RUNNING || status.state == ServerState.STARTING
+                enabled = canStop
             )
             GridButton(Modifier.weight(1f), Icons.Default.Terminal, "Logs", onLogs)
         }
@@ -128,28 +132,31 @@ fun ControlPanelScreen(
         Spacer(modifier = Modifier.weight(1f))
 
         // Running indicator at bottom
-        if (status.state == ServerState.RUNNING) {
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = ClawGreen.copy(alpha = 0.1f),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier.size(8.dp).clip(CircleShape).background(ClawGreen)
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text("Running on port ${status.port}", fontSize = 12.sp, color = ClawGreen)
-                    Spacer(modifier = Modifier.weight(1f))
-                    if (status.uptime > 0) {
-                        val secs = status.uptime
-                        val uptimeText = when {
-                            secs < 60 -> "${secs}s"
-                            secs < 3600 -> "${secs / 60}m ${secs % 60}s"
-                            else -> "${secs / 3600}h ${(secs % 3600) / 60}m"
-                        }
-                        Text("⏱ $uptimeText", fontSize = 11.sp, color = ClawGreen.copy(alpha = 0.7f))
+        if (isRunning) {
+            val uptimeText by remember(status.uptime) {
+                derivedStateOf {
+                    val secs = status.uptime
+                    when {
+                        secs < 60 -> "${secs}s"
+                        secs < 3600 -> "${secs / 60}m ${secs % 60}s"
+                        else -> "${secs / 3600}h ${(secs % 3600) / 60}m"
                     }
+                }
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(ClawGreen.copy(alpha = 0.1f), RoundedCornerShape(10.dp))
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(ClawGreen))
+                Spacer(modifier = Modifier.width(10.dp))
+                Text("Running on port ${status.port}", fontSize = 12.sp, color = ClawGreen)
+                Spacer(modifier = Modifier.weight(1f))
+                if (status.uptime > 0) {
+                    Text("\u23F1 $uptimeText", fontSize = 11.sp, color = ClawGreen.copy(alpha = 0.7f))
                 }
             }
             Spacer(modifier = Modifier.height(8.dp))
@@ -165,53 +172,39 @@ fun ControlPanelScreen(
 
 @Composable
 fun InfoCard(status: ServerStatus) {
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = ClawCardBg,
-        modifier = Modifier.fillMaxWidth()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(ClawCardBg, RoundedCornerShape(12.dp))
+            .padding(14.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                InfoItem(label = "Version", value = status.openclawVersion ?: "—")
-                InfoItem(label = "Port", value = status.port.toString())
-                InfoItem(label = "Disk", value = status.diskUsage.ifBlank { "—" })
-            }
-        }
+        InfoItem(label = "Version", value = status.openclawVersion ?: "\u2014")
+        InfoItem(label = "Port", value = status.port.toString())
+        InfoItem(label = "Disk", value = status.diskUsage.ifBlank { "\u2014" })
     }
 }
 
 @Composable
 fun InfoItem(label: String, value: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(
-            label,
-            fontSize = 10.sp,
-            color = ClawTextSecondary,
-            fontWeight = FontWeight.Medium
-        )
+        Text(label, fontSize = 10.sp, color = ClawTextSecondary, fontWeight = FontWeight.Medium)
         Spacer(modifier = Modifier.height(2.dp))
-        Text(
-            value,
-            fontSize = 13.sp,
-            color = ClawTextPrimary,
-            fontWeight = FontWeight.SemiBold,
-            fontFamily = FontFamily.Monospace
-        )
+        Text(value, fontSize = 13.sp, color = ClawTextPrimary, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace)
     }
 }
 
 @Composable
 fun StatusIndicator(status: ServerStatus) {
-    val (dotColor, text) = when (status.state) {
-        ServerState.RUNNING -> ClawGreen to "OpenClaw is Live"
-        ServerState.STARTING -> ClawYellow to "Starting..."
-        ServerState.STOPPING -> ClawYellow to "Stopping..."
-        ServerState.STOPPED -> ClawGreen to "Ready to Start"
-        ServerState.ERROR -> ClawRed to "Error"
-        ServerState.NOT_INSTALLED -> ClawOrange to "Setup Required"
+    val (dotColor, text) = remember(status.state) {
+        when (status.state) {
+            ServerState.RUNNING -> ClawGreen to "OpenClaw is Live"
+            ServerState.STARTING -> ClawYellow to "Starting..."
+            ServerState.STOPPING -> ClawYellow to "Stopping..."
+            ServerState.STOPPED -> ClawGreen to "Ready to Start"
+            ServerState.ERROR -> ClawRed to "Error"
+            ServerState.NOT_INSTALLED -> ClawOrange to "Setup Required"
+        }
     }
 
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -301,6 +294,7 @@ fun GridButton(
     onClick: () -> Unit,
     enabled: Boolean = true
 ) {
+    val tint = if (enabled) ClawTextPrimary else ClawTextSecondary.copy(alpha = 0.5f)
     Button(
         onClick = onClick,
         modifier = modifier.height(68.dp),
@@ -312,16 +306,9 @@ fun GridButton(
         )
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                icon, contentDescription = null,
-                tint = if (enabled) ClawTextPrimary else ClawTextSecondary.copy(alpha = 0.5f),
-                modifier = Modifier.size(22.dp)
-            )
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
             Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                label, fontSize = 11.sp,
-                color = if (enabled) ClawTextPrimary else ClawTextSecondary.copy(alpha = 0.5f)
-            )
+            Text(label, fontSize = 11.sp, color = tint)
         }
     }
 }

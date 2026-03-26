@@ -36,8 +36,23 @@ fun SettingsScreen(
     var modelExpanded by remember { mutableStateOf(false) }
     var telegramUserInput by remember { mutableStateOf(config.telegramAllowedUsers.joinToString(", ")) }
 
-    val providers = listOf("openrouter", "google", "openai", "anthropic")
-    val models = configManager.getAvailableModels()[localConfig.aiProvider] ?: emptyList()
+    val providers = remember { listOf("openrouter", "google", "openai", "anthropic", "gemini-cli") }
+
+    // Use derivedStateOf for computed values to avoid unnecessary recompositions
+    val models by remember(localConfig.aiProvider) {
+        derivedStateOf { configManager.getAvailableModels()[localConfig.aiProvider] ?: emptyList() }
+    }
+    val needsApiKey by remember(localConfig.aiProvider) {
+        derivedStateOf { configManager.providerRequiresApiKey(localConfig.aiProvider) }
+    }
+    val currentModelLabel by remember(localConfig.aiModel, localConfig.aiProvider) {
+        derivedStateOf { models.firstOrNull { it.first == localConfig.aiModel }?.second ?: localConfig.aiModel }
+    }
+
+    // Preserve scroll state
+    val scrollState = rememberScrollState()
+    // Cache field colors
+    val fieldColors = settingsFieldColors()
 
     Column(
         modifier = Modifier
@@ -66,12 +81,10 @@ fun SettingsScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scrollState)
                 .padding(horizontal = 20.dp)
         ) {
-            // ═══════════════════════════════════════
             // AI PROVIDER SECTION
-            // ═══════════════════════════════════════
             SectionHeader(icon = Icons.Default.Psychology, title = "AI Model")
 
             // Provider dropdown
@@ -86,7 +99,7 @@ fun SettingsScreen(
                     label = { Text("AI Provider", color = ClawTextSecondary) },
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = providerExpanded) },
                     modifier = Modifier.fillMaxWidth().menuAnchor(),
-                    colors = settingsFieldColors()
+                    colors = fieldColors
                 )
                 ExposedDropdownMenu(
                     expanded = providerExpanded,
@@ -96,9 +109,10 @@ fun SettingsScreen(
                         DropdownMenuItem(
                             text = { Text(configManager.getProviderName(provider)) },
                             onClick = {
+                                val firstModel = configManager.getAvailableModels()[provider]?.firstOrNull()?.first ?: ""
                                 localConfig = localConfig.copy(
                                     aiProvider = provider,
-                                    aiModel = configManager.getAvailableModels()[provider]?.firstOrNull()?.first ?: ""
+                                    aiModel = firstModel
                                 )
                                 providerExpanded = false
                             }
@@ -109,27 +123,48 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // API Key
-            OutlinedTextField(
-                value = localConfig.aiApiKey,
-                onValueChange = { localConfig = localConfig.copy(aiApiKey = it) },
-                label = { Text("API Key", color = ClawTextSecondary) },
-                placeholder = { Text(configManager.getProviderKeyHint(localConfig.aiProvider), color = ClawTextSecondary.copy(alpha = 0.3f)) },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
-                trailingIcon = {
-                    IconButton(onClick = { showApiKey = !showApiKey }) {
-                        Icon(
-                            if (showApiKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                            contentDescription = null, tint = ClawTextSecondary
-                        )
-                    }
-                },
-                colors = settingsFieldColors()
-            )
+            // Gemini CLI info note (shown only for gemini-cli provider)
+            if (!needsApiKey) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(ClawGreen.copy(alpha = 0.1f), RoundedCornerShape(10.dp))
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.AccountCircle, contentDescription = null, tint = ClawGreen, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        "Sign in with your Google account. No API key needed.",
+                        fontSize = 13.sp,
+                        color = ClawGreen
+                    )
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+            }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            // API Key (only shown if provider needs one)
+            if (needsApiKey) {
+                OutlinedTextField(
+                    value = localConfig.aiApiKey,
+                    onValueChange = { localConfig = localConfig.copy(aiApiKey = it) },
+                    label = { Text("API Key", color = ClawTextSecondary) },
+                    placeholder = { Text(configManager.getProviderKeyHint(localConfig.aiProvider), color = ClawTextSecondary.copy(alpha = 0.3f)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { showApiKey = !showApiKey }) {
+                            Icon(
+                                if (showApiKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = null, tint = ClawTextSecondary
+                            )
+                        }
+                    },
+                    colors = fieldColors
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+            }
 
             // Model dropdown
             ExposedDropdownMenuBox(
@@ -137,13 +172,13 @@ fun SettingsScreen(
                 onExpandedChange = { modelExpanded = it }
             ) {
                 OutlinedTextField(
-                    value = models.firstOrNull { it.first == localConfig.aiModel }?.second ?: localConfig.aiModel,
+                    value = currentModelLabel,
                     onValueChange = {},
                     readOnly = true,
                     label = { Text("Model", color = ClawTextSecondary) },
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelExpanded) },
                     modifier = Modifier.fillMaxWidth().menuAnchor(),
-                    colors = settingsFieldColors()
+                    colors = fieldColors
                 )
                 ExposedDropdownMenu(
                     expanded = modelExpanded,
@@ -151,7 +186,18 @@ fun SettingsScreen(
                 ) {
                     models.forEach { (id, name) ->
                         DropdownMenuItem(
-                            text = { Text(name) },
+                            text = {
+                                Text(
+                                    name,
+                                    color = when {
+                                        name.contains("Free") -> ClawGreen
+                                        name.contains("Best") -> ClawYellow
+                                        name.contains("Fast") -> ClawBlue
+                                        name.contains("Cheap") -> ClawOrange
+                                        else -> LocalContentColor.current
+                                    }
+                                )
+                            },
                             onClick = {
                                 localConfig = localConfig.copy(aiModel = id)
                                 modelExpanded = false
@@ -163,9 +209,7 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // ═══════════════════════════════════════
             // TELEGRAM SECTION
-            // ═══════════════════════════════════════
             SectionHeader(icon = Icons.Default.Send, title = "Telegram Bot")
 
             OutlinedTextField(
@@ -184,7 +228,7 @@ fun SettingsScreen(
                         )
                     }
                 },
-                colors = settingsFieldColors()
+                colors = fieldColors
             )
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -197,7 +241,7 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                colors = settingsFieldColors()
+                colors = fieldColors
             )
 
             Spacer(modifier = Modifier.height(4.dp))
@@ -208,9 +252,7 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // ═══════════════════════════════════════
             // DISCORD SECTION
-            // ═══════════════════════════════════════
             SectionHeader(icon = Icons.Default.Forum, title = "Discord Bot (Optional)")
 
             OutlinedTextField(
@@ -229,14 +271,12 @@ fun SettingsScreen(
                         )
                     }
                 },
-                colors = settingsFieldColors()
+                colors = fieldColors
             )
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // ═══════════════════════════════════════
             // SERVER SECTION
-            // ═══════════════════════════════════════
             SectionHeader(icon = Icons.Default.Dns, title = "Server")
 
             OutlinedTextField(
@@ -249,25 +289,25 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                colors = settingsFieldColors()
+                colors = fieldColors
             )
 
             Spacer(modifier = Modifier.height(32.dp))
 
             // Info card
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = ClawBlue.copy(alpha = 0.1f)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(ClawBlue.copy(alpha = 0.1f), RoundedCornerShape(14.dp))
+                    .padding(16.dp)
             ) {
-                Row(modifier = Modifier.padding(16.dp)) {
-                    Icon(Icons.Default.Info, contentDescription = null, tint = ClawBlue, modifier = Modifier.size(20.dp))
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        "Settings are saved to openclaw.json in the app's data directory. " +
-                        "API keys are stored in .env file. Restart OpenClaw after changing settings.",
-                        fontSize = 12.sp, color = ClawTextSecondary
-                    )
-                }
+                Icon(Icons.Default.Info, contentDescription = null, tint = ClawBlue, modifier = Modifier.size(20.dp))
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    "Settings are saved to openclaw.json. " +
+                    "API keys are stored in .env file. Restart OpenClaw after changing settings.",
+                    fontSize = 12.sp, color = ClawTextSecondary
+                )
             }
 
             Spacer(modifier = Modifier.height(24.dp))

@@ -14,7 +14,7 @@ data class ClawConfig(
     val telegramBotToken: String = "",
     val telegramAllowedUsers: List<String> = emptyList(),
     // AI Model
-    val aiProvider: String = "openrouter", // openrouter, google, openai, anthropic
+    val aiProvider: String = "openrouter", // openrouter, google, openai, anthropic, gemini-cli
     val aiApiKey: String = "",
     val aiModel: String = "anthropic/claude-sonnet-4",
     // Server
@@ -34,11 +34,15 @@ class ConfigManager(private val context: Context) {
     val baseDir: File get() = File(context.filesDir, "openclaw")
     val workspaceDir: File get() = File(baseDir, "workspace")
     val configFile: File get() = File(baseDir, "openclaw.json")
+    // Secondary config location inside .openclaw subdirectory
+    private val dotOpenclawDir: File get() = File(baseDir, ".openclaw")
+    private val secondaryConfigFile: File get() = File(dotOpenclawDir, "openclaw.json")
     private val envFile: File get() = File(baseDir, ".env")
 
     init {
         baseDir.mkdirs()
         workspaceDir.mkdirs()
+        dotOpenclawDir.mkdirs()
         loadConfig()
     }
 
@@ -71,6 +75,11 @@ class ConfigManager(private val context: Context) {
         _config.value = newConfig
     }
 
+    // Returns true if the given provider requires an API key
+    fun providerRequiresApiKey(provider: String): Boolean {
+        return provider != "gemini-cli"
+    }
+
     suspend fun saveConfig() {
         withContext(Dispatchers.IO) {
             val c = _config.value
@@ -78,6 +87,12 @@ class ConfigManager(private val context: Context) {
 
             // Model & AI provider
             json.put("model", c.aiModel)
+
+            // Gateway settings - always preserve these for local Android operation
+            val gateway = JSONObject()
+            gateway.put("mode", "local")
+            gateway.put("bind", "loopback")
+            json.put("gateway", gateway)
 
             // Channels
             val channels = JSONObject()
@@ -105,7 +120,12 @@ class ConfigManager(private val context: Context) {
 
             json.put("port", c.port)
 
-            configFile.writeText(json.toString(2))
+            val configText = json.toString(2)
+
+            // Write to BOTH config locations
+            configFile.writeText(configText)
+            dotOpenclawDir.mkdirs()
+            secondaryConfigFile.writeText(configText)
 
             // Write .env with API key for the provider
             val envLines = mutableListOf<String>()
@@ -122,6 +142,8 @@ class ConfigManager(private val context: Context) {
                 "anthropic" -> {
                     if (c.aiApiKey.isNotBlank()) envLines.add("ANTHROPIC_API_KEY=${c.aiApiKey}")
                 }
+                // gemini-cli uses Google account OAuth, no API key needed
+                "gemini-cli" -> { }
             }
             if (envLines.isNotEmpty()) {
                 envFile.writeText(envLines.joinToString("\n") + "\n")
@@ -143,43 +165,66 @@ class ConfigManager(private val context: Context) {
         }
     }
 
-    // Access via public properties: baseDir, workspaceDir, configFile
-
     fun getAvailableModels(): Map<String, List<Pair<String, String>>> {
         return mapOf(
             "openrouter" to listOf(
+                // Free models first
+                "google/gemini-2.0-flash-exp" to "Gemini 2.0 Flash Exp (Free)",
+                "google/gemini-2.5-pro-exp-03-25" to "Gemini 2.5 Pro Exp (Free)",
+                "meta-llama/llama-3.3-70b-instruct" to "Llama 3.3 70B (Free Tier)",
+                // Recommended
                 "anthropic/claude-sonnet-4" to "Claude Sonnet 4 (Recommended)",
                 "anthropic/claude-haiku-4" to "Claude Haiku 4 (Fast)",
                 "anthropic/claude-opus-4" to "Claude Opus 4 (Best)",
+                // OpenAI
                 "openai/gpt-4o" to "GPT-4o",
                 "openai/gpt-4o-mini" to "GPT-4o Mini (Cheap)",
+                "openai/o1-mini" to "o1-mini (Reasoning)",
+                "openai/o3-mini" to "o3-mini (Reasoning)",
+                // DeepSeek
+                "deepseek/deepseek-r1" to "DeepSeek R1 (Reasoning)",
+                "deepseek/deepseek-v3-0324" to "DeepSeek V3 (Fast)",
+                // Others
+                "mistralai/mistral-large-latest" to "Mistral Large",
+                "qwen/qwen-2.5-72b-instruct" to "Qwen 2.5 72B",
+                "x-ai/grok-2" to "Grok 2",
                 "google/gemini-2.0-flash-001" to "Gemini 2.0 Flash",
-                "deepseek/deepseek-v3" to "DeepSeek V3",
-                "meta-llama/llama-3.3-70b-instruct" to "Llama 3.3 70B",
             ),
             "google" to listOf(
-                "gemini-2.0-flash" to "Gemini 2.0 Flash (Free)",
-                "gemini-2.0-pro" to "Gemini 2.0 Pro",
+                // Free models
+                "gemini-2.5-pro-exp-03-25" to "Gemini 2.5 Pro Exp (Free!)",
+                "gemini-2.0-flash" to "Gemini 2.0 Flash (Free!)",
+                "gemini-2.0-flash-lite" to "Gemini 2.0 Flash Lite (Free!)",
+                // Paid
                 "gemini-1.5-pro" to "Gemini 1.5 Pro",
+                "gemini-1.5-flash" to "Gemini 1.5 Flash (Fast)",
             ),
             "openai" to listOf(
-                "gpt-4o" to "GPT-4o",
-                "gpt-4o-mini" to "GPT-4o Mini",
+                "gpt-4o" to "GPT-4o (Best)",
+                "gpt-4o-mini" to "GPT-4o Mini (Cheap)",
                 "gpt-4-turbo" to "GPT-4 Turbo",
+                "o1-mini" to "o1-mini (Reasoning)",
+                "o3-mini" to "o3-mini (Reasoning)",
             ),
             "anthropic" to listOf(
-                "claude-sonnet-4-20250514" to "Claude Sonnet 4",
-                "claude-haiku-4-20250514" to "Claude Haiku 4",
-                "claude-opus-4-20250514" to "Claude Opus 4",
+                "claude-sonnet-4-20250514" to "Claude Sonnet 4 (Recommended)",
+                "claude-haiku-4-20250514" to "Claude Haiku 4 (Fast)",
+                "claude-opus-4-20250514" to "Claude Opus 4 (Best)",
+            ),
+            "gemini-cli" to listOf(
+                "gemini-2.5-pro" to "Gemini 2.5 Pro (Default)",
+                "gemini-2.0-flash" to "Gemini 2.0 Flash (Fast)",
+                "gemini-2.0-flash-lite" to "Gemini 2.0 Flash Lite (Lite)",
             )
         )
     }
 
     fun getProviderName(id: String): String = when (id) {
         "openrouter" -> "OpenRouter (Multi-provider)"
-        "google" -> "Google Gemini"
+        "google" -> "Google Gemini (API Key)"
         "openai" -> "OpenAI"
         "anthropic" -> "Anthropic"
+        "gemini-cli" -> "Gemini (Google Account)"
         else -> id
     }
 
@@ -188,6 +233,7 @@ class ConfigManager(private val context: Context) {
         "google" -> "AIzaSy..."
         "openai" -> "sk-..."
         "anthropic" -> "sk-ant-..."
+        "gemini-cli" -> ""
         else -> "API Key"
     }
 }

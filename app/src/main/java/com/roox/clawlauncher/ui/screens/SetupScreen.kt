@@ -10,6 +10,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -37,6 +38,9 @@ fun SetupScreen(
         logScrollState.animateScrollTo(logScrollState.maxValue)
     }
 
+    // Pre-compute log lines to avoid repeated splitting on recomposition
+    val logLines = remember(progress.log) { progress.log.lines() }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -60,14 +64,13 @@ fun SetupScreen(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             if (!progress.isRunning && !progress.isComplete && progress.error == null) {
-                // Initial state — show what's installed
+                // Initial state - show what's installed
                 Icon(Icons.Default.Download, contentDescription = null, tint = ClawRed, modifier = Modifier.size(64.dp))
                 Spacer(modifier = Modifier.height(20.dp))
                 Text("Setup OpenClaw", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = ClawTextPrimary)
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Status checklist
                 StatusCheckItem("Node.js Runtime", isNodeInstalled)
                 StatusCheckItem("OpenClaw Server", isOpenClawInstalled)
 
@@ -75,7 +78,7 @@ fun SetupScreen(
 
                 if (!isNodeInstalled || !isOpenClawInstalled) {
                     Text(
-                        "This will download and install:\n• Node.js v20 LTS (~25 MB)\n• OpenClaw latest (~50 MB)\n\nRequires internet connection.",
+                        "This will download and install:\n\u2022 Node.js v20 LTS (~25 MB)\n\u2022 OpenClaw latest (~50 MB)\n\nRequires internet connection.",
                         fontSize = 13.sp,
                         color = ClawTextSecondary,
                         textAlign = TextAlign.Center
@@ -92,7 +95,7 @@ fun SetupScreen(
                         Text("Install Now", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                     }
                 } else {
-                    Text("Everything is installed! ✅", fontSize = 15.sp, color = ClawGreen)
+                    Text("Everything is installed! \u2705", fontSize = 15.sp, color = ClawGreen)
                     Spacer(modifier = Modifier.height(16.dp))
                     OutlinedButton(
                         onClick = onUpdate,
@@ -115,7 +118,7 @@ fun SetupScreen(
                 }
 
             } else if (progress.isRunning) {
-                // Installing — show progress + live log
+                // Installing - show progress + live log
                 CircularProgressIndicator(color = ClawRed, modifier = Modifier.size(56.dp), strokeWidth = 4.dp)
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(progress.step, fontSize = 15.sp, color = ClawTextPrimary, textAlign = TextAlign.Center)
@@ -123,21 +126,18 @@ fun SetupScreen(
 
                 // Current npm activity line
                 if (progress.npmLine.isNotBlank()) {
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = ClawCardBgLight,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            progress.npmLine,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            color = ClawBlue,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
+                    Text(
+                        progress.npmLine,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = ClawBlue,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(ClawCardBgLight, RoundedCornerShape(8.dp))
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
                     Spacer(modifier = Modifier.height(8.dp))
                 }
 
@@ -152,39 +152,14 @@ fun SetupScreen(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // Live log output
-                if (progress.log.isNotBlank()) {
-                    Surface(
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp),
-                        shape = RoundedCornerShape(10.dp),
-                        color = ClawCardBg
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .verticalScroll(logScrollState)
-                                .padding(10.dp)
-                        ) {
-                            progress.log.lines().forEach { line ->
-                                val color = when {
-                                    line.trimStart().startsWith("✓") || line.trimStart().startsWith("OK") -> ClawGreen
-                                    line.trimStart().startsWith("❌") || line.trimStart().startsWith("ERROR") -> ClawRed
-                                    line.trimStart().startsWith("→") -> ClawBlue
-                                    line.trimStart().startsWith("⚠") -> ClawYellow
-                                    line.trimStart().startsWith("📦") || line.trimStart().startsWith("📥") -> ClawOrange
-                                    line.contains("npm warn") || line.contains("WARN") -> ClawYellow
-                                    line.contains("npm error") || line.contains("ERR!") -> ClawRed
-                                    line.contains("added") && line.contains("package") -> ClawGreen
-                                    else -> ClawTextSecondary
-                                }
-                                Text(line, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = color)
-                            }
-                        }
-                    }
+                if (logLines.isNotEmpty() && progress.log.isNotBlank()) {
+                    LogView(logLines, logScrollState, maxHeight = 300.dp)
                 }
 
             } else if (progress.isComplete) {
                 Icon(Icons.Default.CheckCircle, contentDescription = null, tint = ClawGreen, modifier = Modifier.size(64.dp))
                 Spacer(modifier = Modifier.height(20.dp))
-                Text("Setup Complete! 🦀", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = ClawGreen)
+                Text("Setup Complete! \uD83E\uDD80", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = ClawGreen)
                 Spacer(modifier = Modifier.height(8.dp))
                 Text("OpenClaw is ready to launch", fontSize = 14.sp, color = ClawTextSecondary)
                 Spacer(modifier = Modifier.height(24.dp))
@@ -200,26 +175,12 @@ fun SetupScreen(
                 }
 
                 // Show log even after completion for reference
-                if (progress.log.isNotBlank()) {
+                if (logLines.isNotEmpty() && progress.log.isNotBlank()) {
                     Spacer(modifier = Modifier.height(16.dp))
                     Text("Install Log", fontSize = 12.sp, color = ClawTextSecondary)
                     Spacer(modifier = Modifier.height(8.dp))
-                    Surface(
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 200.dp),
-                        shape = RoundedCornerShape(10.dp),
-                        color = ClawCardBg
-                    ) {
-                        Column(modifier = Modifier.verticalScroll(logScrollState).padding(10.dp)) {
-                            progress.log.lines().takeLast(30).forEach { line ->
-                                val color = when {
-                                    line.trimStart().startsWith("✓") || line.trimStart().startsWith("OK") -> ClawGreen
-                                    line.trimStart().startsWith("❌") -> ClawRed
-                                    else -> ClawTextSecondary
-                                }
-                                Text(line, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = color)
-                            }
-                        }
-                    }
+                    val tailLines = remember(logLines) { logLines.takeLast(30) }
+                    LogView(tailLines, logScrollState, maxHeight = 200.dp)
                 }
 
             } else if (progress.error != null) {
@@ -230,19 +191,9 @@ fun SetupScreen(
                 Text(progress.error!!, fontSize = 13.sp, color = ClawTextSecondary, textAlign = TextAlign.Center)
 
                 // Show log for debugging
-                if (progress.log.isNotBlank()) {
+                if (logLines.isNotEmpty() && progress.log.isNotBlank()) {
                     Spacer(modifier = Modifier.height(16.dp))
-                    Surface(
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 200.dp),
-                        shape = RoundedCornerShape(10.dp),
-                        color = ClawCardBg
-                    ) {
-                        Column(modifier = Modifier.verticalScroll(logScrollState).padding(10.dp)) {
-                            progress.log.lines().forEach { line ->
-                                Text(line, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = ClawTextSecondary)
-                            }
-                        }
-                    }
+                    LogView(logLines, logScrollState, maxHeight = 200.dp)
                 }
 
                 Spacer(modifier = Modifier.height(24.dp))
@@ -256,6 +207,44 @@ fun SetupScreen(
                 }
             }
         }
+    }
+}
+
+// Extracted log view to reduce repetition and recomposition scope
+@Composable
+fun LogView(
+    lines: List<String>,
+    scrollState: ScrollState,
+    maxHeight: androidx.compose.ui.unit.Dp
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = maxHeight)
+            .background(ClawCardBg, RoundedCornerShape(10.dp))
+            .verticalScroll(scrollState)
+            .padding(10.dp)
+    ) {
+        lines.forEach { line ->
+            val color = logLineColor(line)
+            Text(line, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = color)
+        }
+    }
+}
+
+// Compute log line color without allocating inside composable scope
+private fun logLineColor(line: String): Color {
+    val trimmed = line.trimStart()
+    return when {
+        trimmed.startsWith("\u2713") || trimmed.startsWith("OK") -> ClawGreen
+        trimmed.startsWith("\u274C") || trimmed.startsWith("ERROR") -> ClawRed
+        trimmed.startsWith("\u2192") -> ClawBlue
+        trimmed.startsWith("\u26A0") -> ClawYellow
+        trimmed.startsWith("\uD83D\uDCE6") || trimmed.startsWith("\uD83D\uDCE5") -> ClawOrange
+        line.contains("npm warn") || line.contains("WARN") -> ClawYellow
+        line.contains("npm error") || line.contains("ERR!") -> ClawRed
+        line.contains("added") && line.contains("package") -> ClawGreen
+        else -> ClawTextSecondary
     }
 }
 
