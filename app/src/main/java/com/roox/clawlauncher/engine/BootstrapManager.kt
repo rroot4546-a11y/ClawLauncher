@@ -19,7 +19,12 @@ data class SetupProgress(
     val isComplete: Boolean = false,
     val error: String? = null,
     val log: String = "",
-    val npmLine: String = ""
+    val npmLine: String = "",
+    val currentDownload: String = "",
+    val downloadedCount: Int = 0,
+    val totalEstimate: Int = 0,
+    val retryAttempt: Int = 0,
+    val downloadedBytes: Long = 0
 )
 
 class BootstrapManager(private val context: Context) {
@@ -199,61 +204,118 @@ process.on('unhandledRejection', (reason, promise) => {
                 log("✓ npm $npmVer")
                 _progress.value = _progress.value.copy(progress = 0.35f)
 
-                // Step 3: Install OpenClaw
+                // Step 3: Install OpenClaw (with retry + resume)
                 if (!isOpenClawInstalled) {
-                    _progress.value = _progress.value.copy(
-                        step = "Installing OpenClaw...", progress = 0.40f,
-                        npmLine = "Resolving packages..."
-                    )
-
-                    // Clean before install
-                    File(baseDir, ".npm-cache").apply { if (exists()) deleteRecursively(); mkdirs() }
-                    val nm = File(baseDir, "node_modules")
-                    if (nm.exists()) nm.deleteRecursively()
-                    val libNm = File(baseDir, "lib/node_modules")
-                    if (libNm.exists()) libNm.deleteRecursively()
-
-                    log("→ npm install openclaw...")
-                    log("─".repeat(40))
-
+                    val maxRetries = 3
+                    var lastExit = -1
                     var packagesAdded = 0
+                    var downloadedPkgs = mutableSetOf<String>()
+                    var fetchCount = 0
 
-                    val exit = runCmdLines(env, baseDir,
-                        nodeBin.absolutePath, npmCli.absolutePath,
-                        "install", "openclaw",
-                        "--prefix", baseDir.absolutePath,
-                        "--no-audit", "--no-fund",
-                        "--ignore-scripts", "--force"
-                    ) { line ->
-                        log("  $line")
-                        // Update UI with npm activity
-                        parseNpmLine(line)?.let { activity ->
-                            _progress.value = _progress.value.copy(npmLine = activity)
+                    for (attempt in 1..maxRetries) {
+                        _progress.value = _progress.value.copy(
+                            step = if (attempt == 1) "Installing OpenClaw..." else "Retrying install (attempt $attempt/$maxRetries)...",
+                            progress = 0.40f,
+                            npmLine = "Resolving packages...",
+                            retryAttempt = attempt,
+                            downloadedCount = downloadedPkgs.size,
+                            currentDownload = ""
+                        )
+
+                        if (attempt == 1) {
+                            // Only clean on first attempt — preserve partial downloads for resume
+                            File(baseDir, ".npm-cache").apply { if (!exists()) mkdirs() }
                         }
-                        // Progress estimation
-                        when {
-                            line.contains("http fetch") || line.contains("GET https://") ->
-                                _progress.value = _progress.value.copy(
-                                    step = "Downloading packages...",
-                                    progress = (_progress.value.progress + 0.001f).coerceAtMost(0.65f)
-                                )
-                            line.contains("reify") ->
-                                _progress.value = _progress.value.copy(
-                                    step = "Installing...",
-                                    progress = (_progress.value.progress + 0.002f).coerceAtMost(0.80f)
-                                )
-                            line.contains("added") && line.contains("package") -> {
-                                packagesAdded = Regex("""added (\d+)""").find(line)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-                                _progress.value = _progress.value.copy(
-                                    step = "Installed $packagesAdded packages!",
-                                    progress = 0.85f, npmLine = "✅ Done!"
-                                )
+
+                        log(if (attempt == 1) "→ npm install openclaw..." else "→ Retry attempt $attempt/$maxRetries (resuming)...")
+                        log("─".repeat(40))
+
+                        lastExit = runCmdLines(env, baseDir,
+                            nodeBin.absolutePath, npmCli.absolutePath,
+                            "install", "openclaw",
+                            "--prefix", baseDir.absolutePath,
+                            "--no-audit", "--no-fund",
+                            "--ignore-scripts", "--force",
+                            "--prefer-offline"  // use cache for resume
+                        ) { line ->
+                            log("  $line")
+
+                            // Track downloads with detailed info
+                            when {
+                                line.contains("http fetch GET") || (line.contains("GET") && line.contains("registry")) -> {
+                                    val pkg = extractPackageName(line)
+                                    if (pkg.isNotBlank()) {
+                                        downloadedPkgs.add(pkg)
+                                        fetchCount++
+                                        _progress.value = _progress.value.copy(
+                                            step = "Downloading packages...",
+                                            currentDownload = pkg,
+                                            npmLine = "📦 $pkg",
+                                            downloadedCount = downloadedPkgs.size,
+                                            progress = (0.40f + (fetchCount * 0.001f)).coerceAtMost(0.65f)
+                                        )
+                                    }
+                                }
+                                line.contains("http fetch 200") || line.contains("200 https://") -> {
+                                    val pkg = extractPackageName(line)
+                                    val size = Regex("""(\d+)ms""").find(line)?.groupValues?.get(1)
+                                    if (pkg.isNotBlank()) {
+                                        _progress.value = _progress.value.copy(
+                                            npmLine = "✓ $pkg" + if (size != null) " (${size}ms)" else "",
+                                            downloadedCount = downloadedPkgs.size
+                                        )
+                                    }
+                                }
+                                line.contains("reify:") -> {
+                                    val pkg = line.substringAfter("reify:").trim().substringBefore(" ").take(40)
+                                    _progress.value = _progress.value.copy(
+                                        step = "Installing packages...",
+                                        npmLine = "📥 $pkg",
+                                        currentDownload = pkg,
+                                        progress = (_progress.value.progress + 0.002f).coerceAtMost(0.80f)
+                                    )
+                                }
+                                line.contains("added") && line.contains("package") -> {
+                                    packagesAdded = Regex("""added (\d+)""").find(line)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                                    _progress.value = _progress.value.copy(
+                                        step = "✅ Installed $packagesAdded packages!",
+                                        progress = 0.85f,
+                                        npmLine = "✅ Done!",
+                                        currentDownload = "",
+                                        downloadedCount = packagesAdded
+                                    )
+                                }
+                                line.contains("WARN") || line.contains("warn") -> {
+                                    // Show warnings but don't change progress
+                                }
+                                line.contains("ERR") || line.contains("error") -> {
+                                    _progress.value = _progress.value.copy(
+                                        npmLine = "⚠️ ${line.take(60)}"
+                                    )
+                                }
                             }
+                        }
+
+                        log("─".repeat(40))
+                        log("→ Attempt $attempt exit code: $lastExit")
+
+                        // Check if install succeeded (exit 0 or openclaw found)
+                        if (lastExit == 0 || isOpenClawInstalled) {
+                            log("✓ Install successful!")
+                            break
+                        }
+
+                        if (attempt < maxRetries) {
+                            log("→ Will retry in 2 seconds (cached packages will be reused)...")
+                            _progress.value = _progress.value.copy(
+                                step = "Retrying in 2s...",
+                                npmLine = "🔄 Using cached downloads"
+                            )
+                            Thread.sleep(2000)
                         }
                     }
 
-                    log("─".repeat(40))
-                    log("→ Exit code: $exit")
+                    val exit = lastExit
 
                     // Find the CLI entry point (openclaw.mjs, NOT dist/index.js)
                     log("→ Searching for openclaw CLI entry point...")
@@ -367,6 +429,19 @@ process.on('unhandledRejection', (reason, promise) => {
                 _progress.value = _progress.value.copy(isRunning = false, error = e.message)
             }
         }
+    }
+
+    private fun extractPackageName(line: String): String {
+        // Extract package name from npm fetch URLs like:
+        // "http fetch GET https://registry.npmjs.org/openclaw"
+        // "silly fetch GET https://registry.npmjs.org/@scope%2fpackage"
+        val url = line.substringAfter("https://registry.npmjs.org/", "")
+            .substringBefore("?").substringBefore(" ").substringBefore("\t")
+        if (url.isBlank()) {
+            // Try extracting from other URL patterns
+            return line.substringAfterLast("/").substringBefore("?").substringBefore(" ").take(40)
+        }
+        return url.replace("%2f", "/").replace("%2F", "/").take(50)
     }
 
     private fun parseNpmLine(line: String): String? {

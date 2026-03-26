@@ -124,8 +124,62 @@ fun SetupScreen(
                 Text(progress.step, fontSize = 15.sp, color = ClawTextPrimary, textAlign = TextAlign.Center)
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Current npm activity line
-                if (progress.npmLine.isNotBlank()) {
+                // Retry indicator
+                if (progress.retryAttempt > 1) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(ClawYellow.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, tint = ClawYellow, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            "Attempt ${progress.retryAttempt}/3 — using cached downloads",
+                            fontSize = 11.sp, color = ClawYellow
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                // Download counter
+                if (progress.downloadedCount > 0) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            "${progress.downloadedCount} packages downloaded",
+                            fontSize = 11.sp, color = ClawGreen
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+
+                // Current download activity
+                if (progress.currentDownload.isNotBlank()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(ClawCardBgLight, RoundedCornerShape(8.dp))
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("📦", fontSize = 12.sp)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            progress.currentDownload,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = ClawBlue,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                } else if (progress.npmLine.isNotBlank()) {
                     Text(
                         progress.npmLine,
                         fontSize = 11.sp,
