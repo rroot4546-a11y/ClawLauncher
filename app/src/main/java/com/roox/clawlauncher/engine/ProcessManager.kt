@@ -277,6 +277,9 @@ class ProcessManager(private val context: Context, private val configManager: Co
 
                 if (started && proc.isAlive) {
                     appendLog("✓ OpenClaw is running!")
+                    // Save running state for auto-restart after boot
+                    context.getSharedPreferences("claw_prefs", Context.MODE_PRIVATE)
+                        .edit().putBoolean("was_running", true).apply()
                     _status.value = ServerStatus(
                         state = ServerState.RUNNING,
                         message = "OpenClaw is Live",
@@ -325,6 +328,8 @@ class ProcessManager(private val context: Context, private val configManager: Co
     suspend fun stop() {
         _status.value = _status.value.copy(state = ServerState.STOPPING, message = "Stopping...")
         appendLog("→ Stopping OpenClaw...")
+        context.getSharedPreferences("claw_prefs", Context.MODE_PRIVATE)
+            .edit().putBoolean("was_running", false).apply()
 
         withContext(Dispatchers.IO) {
             try {

@@ -32,7 +32,11 @@ fun ControlPanelScreen(
     onSettings: () -> Unit,
     onLogs: () -> Unit,
     onGoToOpenClaw: () -> Unit,
-    onReset: () -> Unit
+    onReset: () -> Unit,
+    onRequestBatteryOptimization: () -> Unit = {},
+    autoStartOnBoot: Boolean = false,
+    onAutoStartToggle: (Boolean) -> Unit = {},
+    isBatteryOptimized: Boolean = true
 ) {
     // Derive state values to avoid recomposition of the whole tree
     val isRunning by remember { derivedStateOf { status.state == ServerState.RUNNING } }
@@ -161,6 +165,16 @@ fun ControlPanelScreen(
             }
             Spacer(modifier = Modifier.height(8.dp))
         }
+
+        // Background settings
+        BackgroundSettingsCard(
+            onRequestBatteryOptimization = onRequestBatteryOptimization,
+            autoStartOnBoot = autoStartOnBoot,
+            onAutoStartToggle = onAutoStartToggle,
+            isBatteryOptimized = isBatteryOptimized
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
 
         TextButton(onClick = onReset, modifier = Modifier.fillMaxWidth()) {
             Icon(Icons.Default.Warning, contentDescription = null, tint = ClawRed, modifier = Modifier.size(18.dp))
@@ -309,6 +323,62 @@ fun GridButton(
             Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
             Spacer(modifier = Modifier.height(4.dp))
             Text(label, fontSize = 11.sp, color = tint)
+        }
+    }
+}
+
+@Composable
+fun BackgroundSettingsCard(
+    onRequestBatteryOptimization: () -> Unit,
+    autoStartOnBoot: Boolean,
+    onAutoStartToggle: (Boolean) -> Unit,
+    isBatteryOptimized: Boolean
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(ClawCardBg, RoundedCornerShape(12.dp))
+            .padding(14.dp)
+    ) {
+        Text("⚙️ Background", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = ClawTextPrimary)
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Battery optimization
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Battery Optimization", fontSize = 12.sp, color = ClawTextPrimary)
+                Text(
+                    if (isBatteryOptimized) "⚠️ Enabled — may kill background" else "✅ Disabled — runs freely",
+                    fontSize = 10.sp,
+                    color = if (isBatteryOptimized) ClawYellow else ClawGreen
+                )
+            }
+            if (isBatteryOptimized) {
+                TextButton(onClick = onRequestBatteryOptimization) {
+                    Text("Disable", fontSize = 11.sp, color = ClawBlue)
+                }
+            }
+        }
+
+        HorizontalDivider(color = ClawCardBgLight, modifier = Modifier.padding(vertical = 6.dp))
+
+        // Auto-start on boot
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Auto-start on boot", fontSize = 12.sp, color = ClawTextPrimary)
+                Text("Start OpenClaw when phone restarts", fontSize = 10.sp, color = ClawTextSecondary)
+            }
+            Switch(
+                checked = autoStartOnBoot,
+                onCheckedChange = onAutoStartToggle,
+                colors = SwitchDefaults.colors(checkedTrackColor = ClawGreen)
+            )
         }
     }
 }

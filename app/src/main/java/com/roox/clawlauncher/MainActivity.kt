@@ -1,5 +1,6 @@
 package com.roox.clawlauncher
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -16,6 +17,7 @@ import com.roox.clawlauncher.engine.BackupManager
 import com.roox.clawlauncher.engine.BootstrapManager
 import com.roox.clawlauncher.engine.ConfigManager
 import com.roox.clawlauncher.engine.ProcessManager
+import com.roox.clawlauncher.service.BatteryHelper
 import com.roox.clawlauncher.ui.screens.*
 import com.roox.clawlauncher.ui.theme.*
 import com.roox.clawlauncher.util.PermissionHelper
@@ -91,6 +93,10 @@ class MainActivity : ComponentActivity() {
                         Tab(selected = selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text("Files") })
                     }
 
+                    val prefs = this@MainActivity.getSharedPreferences("claw_prefs", Context.MODE_PRIVATE)
+                    var autoStart by remember { mutableStateOf(prefs.getBoolean("auto_start_on_boot", false)) }
+                    var isBatteryOptimized by remember { mutableStateOf(!BatteryHelper.isIgnoringBatteryOptimizations(this@MainActivity)) }
+
                     when (selectedTab) {
                         0 -> ControlPanelScreen(
                             status = serverStatus,
@@ -117,7 +123,17 @@ class MainActivity : ComponentActivity() {
                                     processManager.refreshState()
                                     Toast.makeText(this@MainActivity, "App data reset. Restart the app.", Toast.LENGTH_LONG).show()
                                 }
-                            }
+                            },
+                            onRequestBatteryOptimization = {
+                                BatteryHelper.requestIgnoreBatteryOptimizations(this@MainActivity)
+                                // Will re-check on resume
+                            },
+                            autoStartOnBoot = autoStart,
+                            onAutoStartToggle = { enabled ->
+                                autoStart = enabled
+                                prefs.edit().putBoolean("auto_start_on_boot", enabled).apply()
+                            },
+                            isBatteryOptimized = isBatteryOptimized
                         )
                         1 -> ToolkitScreen(
                             onSkillStore = { Toast.makeText(this@MainActivity, "Skill Store coming soon", Toast.LENGTH_SHORT).show() },
