@@ -145,6 +145,28 @@ class BootstrapManager(private val context: Context) {
                 File(baseDir, "workspace").mkdirs()
                 File(baseDir, "tmp").mkdirs()
 
+                // Create android-patch.js FIRST (before any Node.js calls that use NODE_OPTIONS)
+                val patchFile = File(baseDir, "android-patch.js")
+                patchFile.writeText("""
+const os = require('os');
+const origNetworkInterfaces = os.networkInterfaces;
+os.networkInterfaces = function() {
+    const ifaces = origNetworkInterfaces.call(this);
+    const filtered = {};
+    for (const [name, addrs] of Object.entries(ifaces)) {
+        if (name.startsWith('rmnet') || name.startsWith('dummy') || name.startsWith('v4-')) continue;
+        const valid = addrs.filter(a => !a.internal && a.address);
+        if (valid.length > 0 || name === 'lo') filtered[name] = addrs;
+    }
+    return filtered;
+};
+process.on('unhandledRejection', (reason, promise) => {
+    if (reason && reason.message && reason.message.includes('valid address')) return;
+    console.error('Unhandled rejection:', reason);
+});
+""".trimIndent())
+                log("✓ Android network patch created")
+
                 // Step 1: Node.js
                 _progress.value = _progress.value.copy(step = "Checking Node.js...", progress = 0.05f)
                 log("→ Node: ${nodeBin.absolutePath}")
@@ -303,31 +325,7 @@ class BootstrapManager(private val context: Context) {
                             File(baseDir, "workspace").absolutePath, dotWs.absolutePath)).waitFor()
                     } catch (_: Exception) { dotWs.mkdirs() }
                 }
-                // Create a preload script that patches os.networkInterfaces()
-                // to filter out Android interfaces without valid addresses (rmnet*)
-                val preloadFile = File(baseDir, "android-patch.js")
-                preloadFile.writeText("""
-const os = require('os');
-const origNetworkInterfaces = os.networkInterfaces;
-os.networkInterfaces = function() {
-    const ifaces = origNetworkInterfaces.call(this);
-    const filtered = {};
-    for (const [name, addrs] of Object.entries(ifaces)) {
-        // Skip Android mobile data interfaces that have no valid addresses
-        if (name.startsWith('rmnet') || name.startsWith('dummy') || name.startsWith('v4-')) continue;
-        // Only include interfaces with at least one non-internal address
-        const valid = addrs.filter(a => !a.internal && a.address);
-        if (valid.length > 0 || name === 'lo') filtered[name] = addrs;
-    }
-    return filtered;
-};
-// Also prevent unhandled rejections from crashing
-process.on('unhandledRejection', (reason, promise) => {
-    if (reason && reason.message && reason.message.includes('valid address')) return;
-    console.error('Unhandled rejection:', reason);
-});
-""".trimIndent())
-                log("✓ Config + Android patch created")
+                log("✓ Config created")
 
                 val ws = File(baseDir, "workspace")
                 ws.mkdirs()
@@ -445,7 +443,7 @@ process.on('unhandledRejection', (reason, promise) => {
             "PATH" to "$binDir:$nativeLibDir:/system/bin:/system/xbin",
             "LD_LIBRARY_PATH" to nativeLibDir,
             "NODE_ENV" to "production",
-            "NODE_OPTIONS" to "--require=${baseDir.absolutePath}/android-patch.js --unhandled-rejections=warn",
+            "NODE_OPTIONS" to "--unhandled-rejections=warn",
             "TERM" to "xterm-256color",
             "TMPDIR" to File(baseDir, "tmp").apply { mkdirs() }.absolutePath,
             "npm_config_cache" to File(baseDir, ".npm-cache").apply { mkdirs() }.absolutePath,
