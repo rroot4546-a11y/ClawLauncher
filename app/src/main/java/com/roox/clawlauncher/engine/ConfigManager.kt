@@ -138,9 +138,26 @@ class ConfigManager(private val context: Context) {
 
             // Agents → defaults → model → primary (correct schema)
             // Model needs provider prefix for OpenClaw
+            // OpenRouter: "openrouter/google/gemini-2.0-flash-001"
+            // Google direct: "google/gemini-2.0-flash"
+            // Anthropic direct: "anthropic/claude-sonnet-4"
             val fullModel = when (c.aiProvider) {
-                "openrouter" -> if (c.aiModel.startsWith("openrouter/")) c.aiModel else "openrouter/${c.aiModel}"
-                "google" -> if (c.aiModel.startsWith("google/")) c.aiModel else "google/${c.aiModel}"
+                "openrouter" -> {
+                    val m = c.aiModel
+                    if (m.startsWith("openrouter/")) m else "openrouter/$m"
+                }
+                "google" -> {
+                    val m = c.aiModel
+                    if (m.startsWith("google/")) m else "google/$m"
+                }
+                "anthropic" -> {
+                    val m = c.aiModel
+                    if (m.startsWith("anthropic/")) m else "anthropic/$m"
+                }
+                "openai" -> {
+                    val m = c.aiModel
+                    if (m.startsWith("openai/")) m else "openai/$m"
+                }
                 else -> c.aiModel
             }
             val modelObj = JSONObject()
@@ -267,35 +284,32 @@ class ConfigManager(private val context: Context) {
         return mapOf(
             "openrouter" to listOf(
                 // Free models first
-                "google/gemini-2.0-flash-exp" to "Gemini 2.0 Flash Exp (Free)",
-                "google/gemini-2.5-pro-exp-03-25" to "Gemini 2.5 Pro Exp (Free)",
-                "meta-llama/llama-3.3-70b-instruct" to "Llama 3.3 70B (Free Tier)",
-                // Recommended
-                "anthropic/claude-sonnet-4" to "Claude Sonnet 4 (Recommended)",
-                "anthropic/claude-haiku-4" to "Claude Haiku 4 (Fast)",
-                "anthropic/claude-opus-4" to "Claude Opus 4 (Best)",
+                "google/gemini-2.0-flash-001" to "🆓 Gemini 2.0 Flash (Free)",
+                "google/gemini-2.5-pro-preview-05-06" to "🆓 Gemini 2.5 Pro (Free)",
+                "meta-llama/llama-3.3-70b-instruct" to "🆓 Llama 3.3 70B (Free)",
+                "deepseek/deepseek-r1-0528" to "🆓 DeepSeek R1 (Free)",
+                "qwen/qwen3-235b-a22b" to "🆓 Qwen 3 235B (Free)",
+                // Recommended paid
+                "anthropic/claude-sonnet-4" to "💰 Claude Sonnet 4",
+                "anthropic/claude-haiku-4" to "💰 Claude Haiku 4 (Fast)",
+                "anthropic/claude-opus-4" to "💰 Claude Opus 4 (Best)",
                 // OpenAI
-                "openai/gpt-4o" to "GPT-4o",
-                "openai/gpt-4o-mini" to "GPT-4o Mini (Cheap)",
-                "openai/o1-mini" to "o1-mini (Reasoning)",
-                "openai/o3-mini" to "o3-mini (Reasoning)",
-                // DeepSeek
-                "deepseek/deepseek-r1" to "DeepSeek R1 (Reasoning)",
-                "deepseek/deepseek-v3-0324" to "DeepSeek V3 (Fast)",
+                "openai/gpt-4o" to "💰 GPT-4o",
+                "openai/gpt-4o-mini" to "💰 GPT-4o Mini (Cheap)",
+                "openai/o3-mini" to "💰 o3-mini (Reasoning)",
                 // Others
-                "mistralai/mistral-large-latest" to "Mistral Large",
-                "qwen/qwen-2.5-72b-instruct" to "Qwen 2.5 72B",
-                "x-ai/grok-2" to "Grok 2",
-                "google/gemini-2.0-flash-001" to "Gemini 2.0 Flash",
+                "deepseek/deepseek-v3-0324" to "💰 DeepSeek V3 (Fast)",
+                "mistralai/mistral-large-latest" to "💰 Mistral Large",
+                "x-ai/grok-2" to "💰 Grok 2",
             ),
             "google" to listOf(
-                // Free models
-                "gemini-2.5-pro-exp-03-25" to "Gemini 2.5 Pro Exp (Free!)",
-                "gemini-2.0-flash" to "Gemini 2.0 Flash (Free!)",
-                "gemini-2.0-flash-lite" to "Gemini 2.0 Flash Lite (Free!)",
-                // Paid
+                // Free tier models (Gemini API key)
+                "gemini-2.5-pro-preview-05-06" to "🆓 Gemini 2.5 Pro (Best!)",
+                "gemini-2.5-flash-preview-05-20" to "🆓 Gemini 2.5 Flash (Fast!)",
+                "gemini-2.0-flash" to "🆓 Gemini 2.0 Flash",
+                "gemini-2.0-flash-lite" to "🆓 Gemini 2.0 Flash Lite (Fastest)",
                 "gemini-1.5-pro" to "Gemini 1.5 Pro",
-                "gemini-1.5-flash" to "Gemini 1.5 Flash (Fast)",
+                "gemini-1.5-flash" to "Gemini 1.5 Flash",
             ),
             "openai" to listOf(
                 "gpt-4o" to "GPT-4o (Best)",
