@@ -286,8 +286,7 @@ class BootstrapManager(private val context: Context) {
         "primary": "openrouter/anthropic/claude-sonnet-4"
       }
     }
-  },
-  "workspace": "./workspace"
+  }
 }"""
                 val configFile = File(baseDir, "openclaw.json")
                 if (!configFile.exists()) configFile.writeText(configJson)
