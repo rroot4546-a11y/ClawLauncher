@@ -165,6 +165,23 @@ class ProcessManager(private val context: Context, private val configManager: Co
         // Save config before starting
         configManager.saveConfig()
 
+        // Kill any existing gateway process (tracked or orphaned)
+        stop()
+        withContext(Dispatchers.IO) {
+            try {
+                // Also kill any orphaned node processes from previous sessions
+                val port = configManager.config.value.port
+                val killOrphan = ProcessBuilder("sh", "-c",
+                    "for pid in \$(cat ${baseDir.absolutePath}/.openclaw-pid 2>/dev/null) " +
+                    "\$(pgrep -f 'gateway run.*--port $port' 2>/dev/null); do " +
+                    "kill \$pid 2>/dev/null; done; rm -f ${baseDir.absolutePath}/.openclaw-pid"
+                )
+                killOrphan.directory(baseDir)
+                killOrphan.start().waitFor()
+                delay(500)
+            } catch (_: Exception) {}
+        }
+
         _status.value = ServerStatus(state = ServerState.STARTING, message = "Starting OpenClaw gateway...")
         logBuffer.clear()
         appendLog("→ Starting OpenClaw gateway...")
@@ -202,6 +219,12 @@ class ProcessManager(private val context: Context, private val configManager: Co
                 val proc = pb.start()
                 process = proc
                 startTime = System.currentTimeMillis()
+
+                // Save PID for orphan detection
+                try {
+                    val pid = if (Build.VERSION.SDK_INT >= 26) proc.pid() else -1
+                    if (pid > 0) File(baseDir, ".openclaw-pid").writeText(pid.toString())
+                } catch (_: Exception) {}
 
                 // Start reading output in background
                 val reader = BufferedReader(InputStreamReader(proc.inputStream))
