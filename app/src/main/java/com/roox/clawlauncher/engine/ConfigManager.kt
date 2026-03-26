@@ -59,11 +59,8 @@ class ConfigManager(private val context: Context) {
             val botToken = telegram?.optString("botToken", "")
                 ?: telegram?.optString("token", "") // fallback old format
                 ?: ""
-            val allowedUsers = telegram?.optJSONObject("pairing")
-                ?.optJSONArray("allowedUsers")
+            val allowedUsers = telegram?.optJSONArray("allowedUsers")
                 ?.let { arr -> (0 until arr.length()).map { arr.getString(it) } }
-                ?: telegram?.optJSONArray("allowedUsers") // fallback old format
-                    ?.let { arr -> (0 until arr.length()).map { arr.getString(it) } }
                 ?: emptyList()
 
             // Read model: agents.defaults.model.primary
@@ -156,13 +153,13 @@ class ConfigManager(private val context: Context) {
                 val telegram = JSONObject()
                 telegram.put("botToken", c.telegramBotToken)
                 telegram.put("enabled", true)
-                telegram.put("dmPolicy", "open")
                 if (c.telegramAllowedUsers.isNotEmpty()) {
-                    val pairing = JSONObject()
+                    telegram.put("dmPolicy", "pairing")
                     val allowed = JSONArray()
                     c.telegramAllowedUsers.forEach { allowed.put(it) }
-                    pairing.put("allowedUsers", allowed)
-                    telegram.put("pairing", pairing)
+                    telegram.put("allowedUsers", allowed)
+                } else {
+                    telegram.put("dmPolicy", "open")
                 }
                 channels.put("telegram", telegram)
             }
