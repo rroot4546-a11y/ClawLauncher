@@ -99,31 +99,53 @@ class ProcessManager(private val context: Context, private val configManager: Co
 
     private fun buildEnv(): Map<String, String> {
         val config = configManager.config.value
+        val openclawHome = File(baseDir, ".openclaw")
+        openclawHome.mkdirs()
+        val binDir = File(baseDir, "bin").absolutePath
+
         val env = mutableMapOf(
             "HOME" to baseDir.absolutePath,
-            "PATH" to "${File(baseDir, "bin").absolutePath}:$nativeLibDir:/system/bin:/system/xbin",
+            "OPENCLAW_HOME" to openclawHome.absolutePath,
+            "XDG_CONFIG_HOME" to baseDir.absolutePath,
+            "PATH" to "$binDir:$nativeLibDir:/system/bin:/system/xbin",
             "LD_LIBRARY_PATH" to nativeLibDir,
             "NODE_ENV" to "production",
+            "NODE_OPTIONS" to "--unhandled-rejections=warn",
             "TERM" to "xterm-256color",
             "npm_config_prefix" to baseDir.absolutePath,
-            "OPENCLAW_WORKSPACE" to File(baseDir, "workspace").absolutePath
+            "npm_config_cache" to File(baseDir, ".npm-cache").apply { mkdirs() }.absolutePath,
+            "NODE_PATH" to "${baseDir.absolutePath}/lib/node_modules:${baseDir.absolutePath}/node_modules",
+            "TMPDIR" to File(baseDir, "tmp").apply { mkdirs() }.absolutePath,
+            "OPENCLAW_MDNS" to "false",
+            "OPENCLAW_BONJOUR" to "false"
         )
 
-        // Load .env file if exists
-        val envFile = File(baseDir, ".env")
-        if (envFile.exists()) {
-            envFile.readLines().forEach { line ->
-                val trimmed = line.trim()
-                if (trimmed.isNotEmpty() && !trimmed.startsWith("#") && trimmed.contains("=")) {
-                    val (key, value) = trimmed.split("=", limit = 2)
-                    env[key.trim()] = value.trim()
+        // Load .env from ALL locations
+        val envFiles = listOf(
+            File(baseDir, ".env"),
+            File(openclawHome, ".env")
+        )
+        for (envFile in envFiles) {
+            if (envFile.exists()) {
+                envFile.readLines().forEach { line ->
+                    val trimmed = line.trim()
+                    if (trimmed.isNotEmpty() && !trimmed.startsWith("#") && trimmed.contains("=")) {
+                        val parts = trimmed.split("=", limit = 2)
+                        if (parts.size == 2) {
+                            env[parts[0].trim()] = parts[1].trim()
+                        }
+                    }
                 }
             }
         }
 
-        // Ensure TMPDIR exists
-        File(baseDir, "tmp").mkdirs()
-        env["TMPDIR"] = File(baseDir, "tmp").absolutePath
+        // Also set API key directly from config (most reliable)
+        when (config.aiProvider) {
+            "openrouter" -> if (config.aiApiKey.isNotBlank()) env["OPENROUTER_API_KEY"] = config.aiApiKey
+            "google" -> if (config.aiApiKey.isNotBlank()) env["GEMINI_API_KEY"] = config.aiApiKey
+            "openai" -> if (config.aiApiKey.isNotBlank()) env["OPENAI_API_KEY"] = config.aiApiKey
+            "anthropic" -> if (config.aiApiKey.isNotBlank()) env["ANTHROPIC_API_KEY"] = config.aiApiKey
+        }
 
         return env
     }
