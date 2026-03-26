@@ -24,7 +24,9 @@ data class ClawConfig(
     // Discord
     val discordBotToken: String = "",
     // Advanced
-    val openclawVersion: String = "latest"
+    val openclawVersion: String = "latest",
+    // Root access
+    val rootEnabled: Boolean = false
 )
 
 class ConfigManager(private val context: Context) {

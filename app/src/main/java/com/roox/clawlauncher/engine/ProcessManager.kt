@@ -139,6 +139,14 @@ class ProcessManager(private val context: Context, private val configManager: Co
             }
         }
 
+        // Root access: add su paths and enable rootexec
+        if (config.rootEnabled) {
+            env["CLAW_ROOT_ENABLED"] = "true"
+            // Ensure su is accessible
+            val suPaths = "/sbin:/system/bin:/system/xbin:/data/local/xbin:/su/bin:/magisk/.core/bin"
+            env["PATH"] = "${env["PATH"]}:$suPaths"
+        }
+
         // Also set API key directly from config (most reliable)
         when (config.aiProvider) {
             "openrouter" -> if (config.aiApiKey.isNotBlank()) env["OPENROUTER_API_KEY"] = config.aiApiKey

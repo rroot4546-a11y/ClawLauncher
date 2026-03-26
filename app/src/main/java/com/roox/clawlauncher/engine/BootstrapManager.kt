@@ -390,6 +390,13 @@ process.on('unhandledRejection', (reason, promise) => {
                 mkfile(File(ws, "SOUL.md"), "# SOUL.md\n\nAI assistant on Android.\n")
                 log("✓ Workspace ready")
 
+                // Create rootexec wrapper (available if root is enabled later)
+                val logFile = File(baseDir, "root-exec.log")
+                com.roox.clawlauncher.service.RootHelper.createRootExecScript(
+                    File(baseDir, "bin"), logFile
+                )
+                log("✓ Root exec wrapper created")
+
                 // Done!
                 _progress.value = SetupProgress(
                     isRunning = false, step = "Setup complete!", progress = 1f,

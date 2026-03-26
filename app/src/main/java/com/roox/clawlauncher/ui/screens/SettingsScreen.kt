@@ -292,6 +292,64 @@ fun SettingsScreen(
                 colors = fieldColors
             )
 
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // ROOT ACCESS SECTION
+            SectionHeader(icon = Icons.Default.Security, title = "Root Access")
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        if (localConfig.rootEnabled) ClawRed.copy(alpha = 0.1f) else ClawCardBg,
+                        RoundedCornerShape(14.dp)
+                    )
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Enable Root Access",
+                        fontSize = 14.sp, color = ClawTextPrimary, fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        if (localConfig.rootEnabled)
+                            "⚠️ AI can run commands as root!"
+                        else
+                            "Disabled — AI uses normal permissions",
+                        fontSize = 11.sp,
+                        color = if (localConfig.rootEnabled) ClawRed else ClawTextSecondary
+                    )
+                }
+                Switch(
+                    checked = localConfig.rootEnabled,
+                    onCheckedChange = { localConfig = localConfig.copy(rootEnabled = it) },
+                    colors = SwitchDefaults.colors(
+                        checkedTrackColor = ClawRed,
+                        uncheckedTrackColor = ClawCardBgLight
+                    )
+                )
+            }
+
+            if (localConfig.rootEnabled) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(ClawYellow.copy(alpha = 0.1f), RoundedCornerShape(10.dp))
+                        .padding(12.dp)
+                ) {
+                    Text("⚠️", fontSize = 14.sp)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "Root access gives AI full system control.\n" +
+                        "Use rootexec in chat: rootexec ls /data\n" +
+                        "All root commands are logged.",
+                        fontSize = 11.sp, color = ClawYellow
+                    )
+                }
+            }
+
             Spacer(modifier = Modifier.height(32.dp))
 
             // Info card
