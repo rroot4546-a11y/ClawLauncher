@@ -137,14 +137,33 @@ class ConfigManager(private val context: Context) {
             json.put("gateway", gateway)
 
             // Agents → defaults → model → primary (correct schema)
+            // Model needs provider prefix for OpenClaw
+            val fullModel = when (c.aiProvider) {
+                "openrouter" -> if (c.aiModel.startsWith("openrouter/")) c.aiModel else "openrouter/${c.aiModel}"
+                "google" -> if (c.aiModel.startsWith("google/")) c.aiModel else "google/${c.aiModel}"
+                else -> c.aiModel
+            }
             val modelObj = JSONObject()
-            modelObj.put("primary", c.aiModel)
+            modelObj.put("primary", fullModel)
             val defaults = JSONObject()
             defaults.put("model", modelObj)
-            defaults.put("workspace", baseDir.absolutePath + "/workspace")
+            defaults.put("workspace", File(dotOpenclawDir, "workspace").absolutePath)
             val agents = JSONObject()
             agents.put("defaults", defaults)
             json.put("agents", agents)
+
+            // Auth profiles in config
+            if (c.aiApiKey.isNotBlank()) {
+                val authObj = JSONObject()
+                val profilesObj = JSONObject()
+                val profileKey = "${c.aiProvider}:default"
+                val profileVal = JSONObject()
+                profileVal.put("mode", "api_key")
+                profileVal.put("provider", c.aiProvider)
+                profilesObj.put(profileKey, profileVal)
+                authObj.put("profiles", profilesObj)
+                json.put("auth", authObj)
+            }
 
             // Channels (correct schema: botToken not token)
             val channels = JSONObject()
@@ -198,6 +217,26 @@ class ConfigManager(private val context: Context) {
             if (envLines.isNotEmpty()) {
                 envFile.writeText(envContent)
                 File(dotOpenclawDir, ".env").writeText(envContent)
+            }
+
+            // Write auth-profiles.json (how OpenClaw ACTUALLY stores API keys)
+            if (c.aiApiKey.isNotBlank()) {
+                val provider = c.aiProvider
+                val profileKey = "$provider:default"
+                val authProfiles = JSONObject()
+                authProfiles.put("version", 1)
+                val profiles = JSONObject()
+                val profile = JSONObject()
+                profile.put("key", c.aiApiKey)
+                profile.put("provider", provider)
+                profile.put("type", "api_key")
+                profiles.put(profileKey, profile)
+                authProfiles.put("profiles", profiles)
+
+                // Write to the agent dir where OpenClaw looks
+                val agentDir = File(dotOpenclawDir, "agents/main/agent")
+                agentDir.mkdirs()
+                File(agentDir, "auth-profiles.json").writeText(authProfiles.toString(2))
             }
 
             ensureWorkspaceFiles()

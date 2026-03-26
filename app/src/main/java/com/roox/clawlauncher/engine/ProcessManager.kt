@@ -99,13 +99,12 @@ class ProcessManager(private val context: Context, private val configManager: Co
 
     private fun buildEnv(): Map<String, String> {
         val config = configManager.config.value
-        val openclawHome = File(baseDir, ".openclaw")
-        openclawHome.mkdirs()
+        // OPENCLAW_HOME should be baseDir itself (not baseDir/.openclaw/)
+        // OpenClaw creates .openclaw/ inside HOME, so HOME=baseDir means config at baseDir/.openclaw/
         val binDir = File(baseDir, "bin").absolutePath
 
         val env = mutableMapOf(
             "HOME" to baseDir.absolutePath,
-            "OPENCLAW_HOME" to openclawHome.absolutePath,
             "XDG_CONFIG_HOME" to baseDir.absolutePath,
             "PATH" to "$binDir:$nativeLibDir:/system/bin:/system/xbin",
             "LD_LIBRARY_PATH" to nativeLibDir,

@@ -486,30 +486,25 @@ process.on('unhandledRejection', (reason, promise) => {
 
     fun buildEnv(): Map<String, String> {
         val binDir = File(baseDir, "bin").absolutePath
-        // OpenClaw looks for config at $HOME/.openclaw/ or $OPENCLAW_HOME/
-        // We create .openclaw/ inside baseDir and point HOME there
-        val openclawHome = File(baseDir, ".openclaw").apply { mkdirs() }
-        // Copy/link openclaw.json to .openclaw/ if it exists in baseDir
+        // HOME=baseDir → OpenClaw looks for config at baseDir/.openclaw/openclaw.json
+        // Ensure .openclaw/ dir exists with config
+        val dotDir = File(baseDir, ".openclaw")
+        dotDir.mkdirs()
         val srcConfig = File(baseDir, "openclaw.json")
-        val dstConfig = File(openclawHome, "openclaw.json")
-        if (srcConfig.exists() && !dstConfig.exists()) {
+        val dstConfig = File(dotDir, "openclaw.json")
+        if (srcConfig.exists()) {
             srcConfig.copyTo(dstConfig, overwrite = true)
         }
-        // Also ensure workspace symlink exists in .openclaw/
-        val wsLink = File(openclawHome, "workspace")
+        // Workspace symlink inside .openclaw/
+        val wsLink = File(dotDir, "workspace")
         val wsTarget = File(baseDir, "workspace")
         if (!wsLink.exists() && wsTarget.exists()) {
             try {
                 Runtime.getRuntime().exec(arrayOf("ln", "-sf", wsTarget.absolutePath, wsLink.absolutePath)).waitFor()
-            } catch (_: Exception) {
-                // Fallback: just create the dir
-                wsLink.mkdirs()
-            }
+            } catch (_: Exception) { wsLink.mkdirs() }
         }
         return mapOf(
             "HOME" to baseDir.absolutePath,
-            "OPENCLAW_HOME" to openclawHome.absolutePath,
-            "XDG_CONFIG_HOME" to baseDir.absolutePath,
             "PATH" to "$binDir:$nativeLibDir:/system/bin:/system/xbin",
             "LD_LIBRARY_PATH" to nativeLibDir,
             "NODE_ENV" to "production",
