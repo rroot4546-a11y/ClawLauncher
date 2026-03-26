@@ -155,7 +155,8 @@ class ProcessManager(private val context: Context, private val configManager: Co
                 val cmd = listOf(
                     nodeBin.absolutePath,
                     mainFile.absolutePath,
-                    "gateway", "start", "--foreground"
+                    "gateway", "run",
+                    "--port", port.toString()
                 )
 
                 appendLog("→ Command: ${cmd.joinToString(" ")}")
