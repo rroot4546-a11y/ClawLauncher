@@ -153,14 +153,7 @@ class ConfigManager(private val context: Context) {
                 val telegram = JSONObject()
                 telegram.put("botToken", c.telegramBotToken)
                 telegram.put("enabled", true)
-                if (c.telegramAllowedUsers.isNotEmpty()) {
-                    telegram.put("dmPolicy", "pairing")
-                    val allowed = JSONArray()
-                    c.telegramAllowedUsers.forEach { allowed.put(it) }
-                    telegram.put("allowedUsers", allowed)
-                } else {
-                    telegram.put("dmPolicy", "open")
-                }
+                telegram.put("dmPolicy", "pairing")
                 channels.put("telegram", telegram)
             }
 
