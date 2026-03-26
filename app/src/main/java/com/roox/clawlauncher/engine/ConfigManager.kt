@@ -47,28 +47,75 @@ class ConfigManager(private val context: Context) {
     }
 
     private fun loadConfig() {
-        if (configFile.exists()) {
-            try {
-                val json = JSONObject(configFile.readText())
-                _config.value = ClawConfig(
-                    telegramBotToken = json.optJSONObject("channels")
-                        ?.optJSONObject("telegram")
-                        ?.optString("token", "") ?: "",
-                    telegramAllowedUsers = json.optJSONObject("channels")
-                        ?.optJSONObject("telegram")
-                        ?.optJSONArray("allowedUsers")
-                        ?.let { arr -> (0 until arr.length()).map { arr.getString(it) } }
-                        ?: emptyList(),
-                    aiProvider = json.optString("provider", "openrouter"),
-                    aiApiKey = json.optString("apiKey", ""),
-                    aiModel = json.optString("model", "anthropic/claude-sonnet-4"),
-                    port = json.optInt("port", 3000),
-                    discordBotToken = json.optJSONObject("channels")
-                        ?.optJSONObject("discord")
-                        ?.optString("token", "") ?: "",
-                )
-            } catch (_: Exception) { }
-        }
+        // Try secondary location first (.openclaw/), then primary
+        val file = if (secondaryConfigFile.exists()) secondaryConfigFile
+                   else if (configFile.exists()) configFile
+                   else return
+        try {
+            val json = JSONObject(file.readText())
+
+            // Read Telegram: channels.telegram.botToken (correct schema)
+            val telegram = json.optJSONObject("channels")?.optJSONObject("telegram")
+            val botToken = telegram?.optString("botToken", "")
+                ?: telegram?.optString("token", "") // fallback old format
+                ?: ""
+            val allowedUsers = telegram?.optJSONObject("pairing")
+                ?.optJSONArray("allowedUsers")
+                ?.let { arr -> (0 until arr.length()).map { arr.getString(it) } }
+                ?: telegram?.optJSONArray("allowedUsers") // fallback old format
+                    ?.let { arr -> (0 until arr.length()).map { arr.getString(it) } }
+                ?: emptyList()
+
+            // Read model: agents.defaults.model.primary
+            val model = json.optJSONObject("agents")
+                ?.optJSONObject("defaults")
+                ?.optJSONObject("model")
+                ?.optString("primary", "")
+                ?: json.optString("model", "anthropic/claude-sonnet-4")
+
+            // Read port: gateway.port
+            val port = json.optJSONObject("gateway")?.optInt("port", 3000)
+                ?: json.optInt("port", 3000)
+
+            // Read Discord: channels.discord.botToken
+            val discordToken = json.optJSONObject("channels")?.optJSONObject("discord")
+                ?.optString("botToken", "")
+                ?: json.optJSONObject("channels")?.optJSONObject("discord")
+                    ?.optString("token", "")
+                ?: ""
+
+            // Read API key from .env file
+            var apiKey = ""
+            var provider = "openrouter"
+            val envContent = if (envFile.exists()) envFile.readText() else
+                if (File(dotOpenclawDir, ".env").exists()) File(dotOpenclawDir, ".env").readText() else ""
+            for (line in envContent.lines()) {
+                when {
+                    line.startsWith("OPENROUTER_API_KEY=") -> {
+                        apiKey = line.substringAfter("="); provider = "openrouter"
+                    }
+                    line.startsWith("GEMINI_API_KEY=") -> {
+                        apiKey = line.substringAfter("="); provider = "google"
+                    }
+                    line.startsWith("OPENAI_API_KEY=") -> {
+                        apiKey = line.substringAfter("="); provider = "openai"
+                    }
+                    line.startsWith("ANTHROPIC_API_KEY=") -> {
+                        apiKey = line.substringAfter("="); provider = "anthropic"
+                    }
+                }
+            }
+
+            _config.value = ClawConfig(
+                telegramBotToken = botToken,
+                telegramAllowedUsers = allowedUsers,
+                aiProvider = provider,
+                aiApiKey = apiKey,
+                aiModel = model,
+                port = port,
+                discordBotToken = discordToken
+            )
+        } catch (_: Exception) { }
     }
 
     fun updateConfig(newConfig: ClawConfig) {
@@ -85,40 +132,51 @@ class ConfigManager(private val context: Context) {
             val c = _config.value
             val json = JSONObject()
 
-            // Model & AI provider
-            json.put("model", c.aiModel)
-
-            // Gateway settings - always preserve these for local Android operation
+            // Gateway settings (correct schema)
             val gateway = JSONObject()
             gateway.put("mode", "local")
             gateway.put("bind", "loopback")
+            gateway.put("port", c.port)
             json.put("gateway", gateway)
 
-            // Channels
+            // Agents → defaults → model → primary (correct schema)
+            val modelObj = JSONObject()
+            modelObj.put("primary", c.aiModel)
+            val defaults = JSONObject()
+            defaults.put("model", modelObj)
+            defaults.put("workspace", baseDir.absolutePath + "/workspace")
+            val agents = JSONObject()
+            agents.put("defaults", defaults)
+            json.put("agents", agents)
+
+            // Channels (correct schema: botToken not token)
             val channels = JSONObject()
 
-            // Telegram
             if (c.telegramBotToken.isNotBlank()) {
                 val telegram = JSONObject()
-                telegram.put("token", c.telegramBotToken)
+                telegram.put("botToken", c.telegramBotToken)
+                telegram.put("enabled", true)
+                telegram.put("dmPolicy", "open")
                 if (c.telegramAllowedUsers.isNotEmpty()) {
-                    telegram.put("allowedUsers", JSONArray(c.telegramAllowedUsers))
+                    val pairing = JSONObject()
+                    val allowed = JSONArray()
+                    c.telegramAllowedUsers.forEach { allowed.put(it) }
+                    pairing.put("allowedUsers", allowed)
+                    telegram.put("pairing", pairing)
                 }
                 channels.put("telegram", telegram)
             }
 
-            // Discord
             if (c.discordBotToken.isNotBlank()) {
                 val discord = JSONObject()
-                discord.put("token", c.discordBotToken)
+                discord.put("botToken", c.discordBotToken)
+                discord.put("enabled", true)
                 channels.put("discord", discord)
             }
 
             if (channels.length() > 0) {
                 json.put("channels", channels)
             }
-
-            json.put("port", c.port)
 
             val configText = json.toString(2)
 
@@ -142,14 +200,16 @@ class ConfigManager(private val context: Context) {
                 "anthropic" -> {
                     if (c.aiApiKey.isNotBlank()) envLines.add("ANTHROPIC_API_KEY=${c.aiApiKey}")
                 }
-                // gemini-cli uses Google account OAuth, no API key needed
                 "gemini-cli" -> { }
             }
+
+            // Write .env to BOTH locations
+            val envContent = envLines.joinToString("\n") + "\n"
             if (envLines.isNotEmpty()) {
-                envFile.writeText(envLines.joinToString("\n") + "\n")
+                envFile.writeText(envContent)
+                File(dotOpenclawDir, ".env").writeText(envContent)
             }
 
-            // Create workspace files if they don't exist
             ensureWorkspaceFiles()
         }
     }
