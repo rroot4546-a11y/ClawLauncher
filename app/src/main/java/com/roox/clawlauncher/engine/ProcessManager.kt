@@ -222,7 +222,9 @@ class ProcessManager(private val context: Context, private val configManager: Co
 
                 // Save PID for orphan detection
                 try {
-                    val pid = if (Build.VERSION.SDK_INT >= 26) proc.pid() else -1
+                    val pidField = proc.javaClass.getDeclaredField("pid")
+                    pidField.isAccessible = true
+                    val pid = pidField.getInt(proc)
                     if (pid > 0) File(baseDir, ".openclaw-pid").writeText(pid.toString())
                 } catch (_: Exception) {}
 
