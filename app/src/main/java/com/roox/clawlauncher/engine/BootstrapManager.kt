@@ -270,8 +270,42 @@ class BootstrapManager(private val context: Context) {
                     log("✓ OpenClaw already installed: ${getOpenclawMainPath()}")
                 }
 
-                // Step 4: Workspace
+                // Step 4: Config + Workspace
                 _progress.value = _progress.value.copy(step = "Finalizing...", progress = 0.92f, npmLine = "")
+
+                // Create openclaw config in both locations
+                val configJson = """{
+  "gateway": {
+    "mode": "local",
+    "bind": "loopback",
+    "port": 3000
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openrouter/anthropic/claude-sonnet-4"
+      }
+    }
+  },
+  "workspace": "./workspace"
+}"""
+                val configFile = File(baseDir, "openclaw.json")
+                if (!configFile.exists()) configFile.writeText(configJson)
+                // Also put in .openclaw/ (where OpenClaw actually looks)
+                val dotDir = File(baseDir, ".openclaw")
+                dotDir.mkdirs()
+                val dotConfig = File(dotDir, "openclaw.json")
+                if (!dotConfig.exists()) dotConfig.writeText(configJson)
+                // Workspace inside .openclaw/
+                val dotWs = File(dotDir, "workspace")
+                if (!dotWs.exists()) {
+                    try {
+                        Runtime.getRuntime().exec(arrayOf("ln", "-sf",
+                            File(baseDir, "workspace").absolutePath, dotWs.absolutePath)).waitFor()
+                    } catch (_: Exception) { dotWs.mkdirs() }
+                }
+                log("✓ Config created")
+
                 val ws = File(baseDir, "workspace")
                 ws.mkdirs()
                 mkfile(File(ws, "AGENTS.md"), "# AGENTS.md\n\nOpenClaw workspace.\n")
@@ -361,8 +395,30 @@ class BootstrapManager(private val context: Context) {
 
     fun buildEnv(): Map<String, String> {
         val binDir = File(baseDir, "bin").absolutePath
+        // OpenClaw looks for config at $HOME/.openclaw/ or $OPENCLAW_HOME/
+        // We create .openclaw/ inside baseDir and point HOME there
+        val openclawHome = File(baseDir, ".openclaw").apply { mkdirs() }
+        // Copy/link openclaw.json to .openclaw/ if it exists in baseDir
+        val srcConfig = File(baseDir, "openclaw.json")
+        val dstConfig = File(openclawHome, "openclaw.json")
+        if (srcConfig.exists() && !dstConfig.exists()) {
+            srcConfig.copyTo(dstConfig, overwrite = true)
+        }
+        // Also ensure workspace symlink exists in .openclaw/
+        val wsLink = File(openclawHome, "workspace")
+        val wsTarget = File(baseDir, "workspace")
+        if (!wsLink.exists() && wsTarget.exists()) {
+            try {
+                Runtime.getRuntime().exec(arrayOf("ln", "-sf", wsTarget.absolutePath, wsLink.absolutePath)).waitFor()
+            } catch (_: Exception) {
+                // Fallback: just create the dir
+                wsLink.mkdirs()
+            }
+        }
         return mapOf(
             "HOME" to baseDir.absolutePath,
+            "OPENCLAW_HOME" to openclawHome.absolutePath,
+            "XDG_CONFIG_HOME" to baseDir.absolutePath,
             "PATH" to "$binDir:$nativeLibDir:/system/bin:/system/xbin",
             "LD_LIBRARY_PATH" to nativeLibDir,
             "NODE_ENV" to "production",

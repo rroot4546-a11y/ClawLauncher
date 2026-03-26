@@ -156,7 +156,10 @@ class ProcessManager(private val context: Context, private val configManager: Co
                     nodeBin.absolutePath,
                     mainFile.absolutePath,
                     "gateway", "run",
-                    "--port", port.toString()
+                    "--port", port.toString(),
+                    "--dev",
+                    "--allow-unconfigured",
+                    "--bind", "loopback"
                 )
 
                 appendLog("→ Command: ${cmd.joinToString(" ")}")
