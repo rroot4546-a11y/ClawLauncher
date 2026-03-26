@@ -162,7 +162,8 @@ class ProcessManager(private val context: Context, private val configManager: Co
                     "--port", port.toString(),
                     "--dev",
                     "--allow-unconfigured",
-                    "--bind", "loopback"
+                    "--bind", "loopback",
+                    "--auth", "none"
                 )
 
                 appendLog("→ Command: ${cmd.joinToString(" ")}")
