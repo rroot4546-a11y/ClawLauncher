@@ -120,9 +120,10 @@ class ProcessManager(private val context: Context, private val configManager: Co
         )
 
         // Load .env from ALL locations
+        val dotDir = File(baseDir, ".openclaw")
         val envFiles = listOf(
             File(baseDir, ".env"),
-            File(openclawHome, ".env")
+            File(dotDir, ".env")
         )
         for (envFile in envFiles) {
             if (envFile.exists()) {
