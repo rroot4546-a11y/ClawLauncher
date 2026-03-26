@@ -421,11 +421,14 @@ class BootstrapManager(private val context: Context) {
             "PATH" to "$binDir:$nativeLibDir:/system/bin:/system/xbin",
             "LD_LIBRARY_PATH" to nativeLibDir,
             "NODE_ENV" to "production",
+            "NODE_OPTIONS" to "--unhandled-rejections=warn",
             "TERM" to "xterm-256color",
             "TMPDIR" to File(baseDir, "tmp").apply { mkdirs() }.absolutePath,
             "npm_config_cache" to File(baseDir, ".npm-cache").apply { mkdirs() }.absolutePath,
             "npm_config_prefix" to baseDir.absolutePath,
-            "NODE_PATH" to "${baseDir.absolutePath}/lib/node_modules:${baseDir.absolutePath}/node_modules"
+            "NODE_PATH" to "${baseDir.absolutePath}/lib/node_modules:${baseDir.absolutePath}/node_modules",
+            "OPENCLAW_MDNS" to "false",
+            "OPENCLAW_BONJOUR" to "false"
         )
     }
 
