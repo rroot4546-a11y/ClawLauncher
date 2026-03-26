@@ -220,6 +220,8 @@ class ConfigManager(private val context: Context) {
             }
 
             // Write auth-profiles.json (how OpenClaw ACTUALLY stores API keys)
+            // OpenClaw resolves: HOME/.openclaw/ as config dir, then looks for
+            // .openclaw/agents/ inside THAT dir = HOME/.openclaw/.openclaw/agents/
             if (c.aiApiKey.isNotBlank()) {
                 val provider = c.aiProvider
                 val profileKey = "$provider:default"
@@ -233,10 +235,17 @@ class ConfigManager(private val context: Context) {
                 profiles.put(profileKey, profile)
                 authProfiles.put("profiles", profiles)
 
-                // Write to the agent dir where OpenClaw looks
-                val agentDir = File(dotOpenclawDir, "agents/main/agent")
-                agentDir.mkdirs()
-                File(agentDir, "auth-profiles.json").writeText(authProfiles.toString(2))
+                val authJson = authProfiles.toString(2)
+                // Write to ALL possible locations OpenClaw might look
+                val paths = listOf(
+                    File(dotOpenclawDir, "agents/main/agent"),
+                    File(dotOpenclawDir, ".openclaw/agents/main/agent"),
+                    File(baseDir, "agents/main/agent")
+                )
+                for (path in paths) {
+                    path.mkdirs()
+                    File(path, "auth-profiles.json").writeText(authJson)
+                }
             }
 
             ensureWorkspaceFiles()
