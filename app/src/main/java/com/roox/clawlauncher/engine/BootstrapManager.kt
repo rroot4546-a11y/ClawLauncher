@@ -296,18 +296,13 @@ process.on('unhandledRejection', (reason, promise) => {
                 _progress.value = _progress.value.copy(step = "Finalizing...", progress = 0.92f, npmLine = "")
 
                 // Create openclaw config in both locations
+                // Minimal config — only gateway settings
+                // OpenClaw onboarding handles the rest (model, API key, channels)
                 val configJson = """{
   "gateway": {
     "mode": "local",
     "bind": "loopback",
     "port": 3000
-  },
-  "agents": {
-    "defaults": {
-      "model": {
-        "primary": "openrouter/anthropic/claude-sonnet-4"
-      }
-    }
   }
 }"""
                 val configFile = File(baseDir, "openclaw.json")
