@@ -152,8 +152,11 @@ class ProcessManager(private val context: Context, private val configManager: Co
                 val env = buildEnv()
                 val port = configManager.config.value.port
 
-                val cmd = listOf(
+                // Preload android-patch.js to filter broken network interfaces
+                val patchFile = File(baseDir, "android-patch.js")
+                val cmd = mutableListOf(
                     nodeBin.absolutePath,
+                    "--require", patchFile.absolutePath,
                     mainFile.absolutePath,
                     "gateway", "run",
                     "--port", port.toString(),
