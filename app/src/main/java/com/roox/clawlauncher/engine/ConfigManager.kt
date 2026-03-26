@@ -190,6 +190,7 @@ class ConfigManager(private val context: Context) {
                 telegram.put("botToken", c.telegramBotToken)
                 telegram.put("enabled", true)
                 telegram.put("dmPolicy", "open")
+                telegram.put("allowFrom", org.json.JSONArray(listOf("*")))
                 channels.put("telegram", telegram)
             }
 
