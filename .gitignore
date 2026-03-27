@@ -8,3 +8,4 @@
 /app/build
 *.apk
 *.aab
+license-server/node_modules/
