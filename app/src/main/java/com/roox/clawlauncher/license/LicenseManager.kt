@@ -34,8 +34,8 @@ class LicenseManager(private val context: Context) {
     private val _status = MutableStateFlow(LicenseStatus())
     val status: StateFlow<LicenseStatus> = _status
 
-    // Your Firebase Cloud Function URL (set this after deployment)
-    private val LICENSE_API = "https://us-central1-clawlauncher-license.cloudfunctions.net/api"
+    // License server URL
+    private val LICENSE_API = "https://claw-license.clawrun.app/api"
 
     // Offline grace period: 3 days
     private val OFFLINE_GRACE_MS = 3L * 24 * 60 * 60 * 1000
