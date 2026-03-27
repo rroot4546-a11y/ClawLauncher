@@ -1,19 +1,25 @@
-// ClawLauncher License Server
-// Deploy as Firebase Cloud Functions or standalone Node.js server
-
+// ClawLauncher License Server — Firebase Firestore Edition
 const express = require('express');
 const crypto = require('crypto');
+const admin = require('firebase-admin');
+
 const app = express();
 app.use(express.json());
 
-// In-memory store (replace with Firestore for production)
-// For Firebase: const admin = require('firebase-admin'); admin.initializeApp();
-// const db = admin.firestore();
+// Initialize Firebase
+// Option 1: Service account key file
+// admin.initializeApp({ credential: admin.credential.cert(require('./serviceAccountKey.json')) });
+// Option 2: Application Default Credentials (for Cloud Run/Functions)
+admin.initializeApp({
+    credential: admin.credential.cert(require('./serviceAccountKey.json'))
+});
 
-const ADMIN_KEY = process.env.ADMIN_KEY || 'claw-admin-2026-secret';
-const licenses = new Map(); // key -> license data
+const db = admin.firestore();
+const licensesCol = db.collection('licenses');
 
-// Middleware: Admin auth
+const ADMIN_KEY = process.env.ADMIN_KEY || 'claw-roox-admin-2026';
+
+// Admin auth middleware
 function adminAuth(req, res, next) {
     const auth = req.headers.authorization?.replace('Bearer ', '');
     if (auth !== ADMIN_KEY) return res.status(401).json({ error: 'Unauthorized' });
@@ -30,140 +36,182 @@ function generateKey() {
 // === PUBLIC ENDPOINTS ===
 
 // Activate license
-app.post('/api/activate', (req, res) => {
-    const { key, deviceId, deviceName, appVersion } = req.body;
-    if (!key || !deviceId) return res.status(400).json({ error: 'Missing key or deviceId' });
+app.post('/api/activate', async (req, res) => {
+    try {
+        const { key, deviceId, deviceName, appVersion } = req.body;
+        if (!key || !deviceId) return res.status(400).json({ error: 'Missing key or deviceId' });
 
-    const license = licenses.get(key);
-    if (!license) return res.json({ success: false, error: 'Invalid license key' });
-    if (license.revoked) return res.json({ success: false, error: 'License has been revoked' });
-    if (license.expiresAt < Date.now()) return res.json({ success: false, error: 'License expired' });
+        const doc = await licensesCol.doc(key).get();
+        if (!doc.exists) return res.json({ success: false, error: 'Invalid license key' });
 
-    // Check device binding (max 1 device per key)
-    if (license.deviceId && license.deviceId !== deviceId) {
-        return res.json({ success: false, error: 'License already activated on another device' });
+        const license = doc.data();
+        if (license.revoked) return res.json({ success: false, error: 'License has been revoked' });
+        if (license.expiresAt < Date.now()) return res.json({ success: false, error: 'License expired' });
+
+        // Device binding (1 device per key)
+        if (license.deviceId && license.deviceId !== deviceId) {
+            return res.json({ success: false, error: 'License already activated on another device' });
+        }
+
+        // Bind to device
+        await licensesCol.doc(key).update({
+            deviceId,
+            deviceName: deviceName || 'Unknown',
+            lastSeen: Date.now(),
+            appVersion: appVersion || null,
+            activatedAt: license.activatedAt || Date.now()
+        });
+
+        const daysLeft = Math.ceil((license.expiresAt - Date.now()) / (24 * 60 * 60 * 1000));
+        res.json({ success: true, expiresAt: license.expiresAt, plan: license.plan, daysLeft });
+    } catch (e) {
+        console.error('Activate error:', e);
+        res.status(500).json({ error: 'Server error' });
     }
-
-    // Bind to device
-    license.deviceId = deviceId;
-    license.deviceName = deviceName || 'Unknown';
-    license.lastSeen = Date.now();
-    license.appVersion = appVersion;
-    license.activatedAt = license.activatedAt || Date.now();
-
-    res.json({
-        success: true,
-        expiresAt: license.expiresAt,
-        plan: license.plan,
-        daysLeft: Math.ceil((license.expiresAt - Date.now()) / (24 * 60 * 60 * 1000))
-    });
 });
 
 // Verify license
-app.post('/api/verify', (req, res) => {
-    const { key, deviceId } = req.body;
-    if (!key || !deviceId) return res.status(400).json({ error: 'Missing params' });
+app.post('/api/verify', async (req, res) => {
+    try {
+        const { key, deviceId } = req.body;
+        if (!key || !deviceId) return res.status(400).json({ error: 'Missing params' });
 
-    const license = licenses.get(key);
-    if (!license) return res.json({ valid: false, error: 'Invalid key' });
-    if (license.revoked) return res.json({ valid: false, error: 'License revoked' });
-    if (license.expiresAt < Date.now()) return res.json({ valid: false, error: 'License expired' });
-    if (license.deviceId && license.deviceId !== deviceId) {
-        return res.json({ valid: false, error: 'Device mismatch' });
+        const doc = await licensesCol.doc(key).get();
+        if (!doc.exists) return res.json({ valid: false, error: 'Invalid key' });
+
+        const license = doc.data();
+        if (license.revoked) return res.json({ valid: false, error: 'License revoked' });
+        if (license.expiresAt < Date.now()) return res.json({ valid: false, error: 'License expired' });
+        if (license.deviceId && license.deviceId !== deviceId) {
+            return res.json({ valid: false, error: 'Device mismatch' });
+        }
+
+        await licensesCol.doc(key).update({ lastSeen: Date.now() });
+
+        const daysLeft = Math.ceil((license.expiresAt - Date.now()) / (24 * 60 * 60 * 1000));
+        res.json({ valid: true, expiresAt: license.expiresAt, plan: license.plan, daysLeft });
+    } catch (e) {
+        console.error('Verify error:', e);
+        res.status(500).json({ error: 'Server error' });
     }
-
-    license.lastSeen = Date.now();
-
-    res.json({
-        valid: true,
-        expiresAt: license.expiresAt,
-        plan: license.plan,
-        daysLeft: Math.ceil((license.expiresAt - Date.now()) / (24 * 60 * 60 * 1000))
-    });
 });
 
 // === ADMIN ENDPOINTS ===
 
 // Generate new key
-app.post('/api/admin/generate', adminAuth, (req, res) => {
-    const { duration = 30, plan = 'monthly', note = '' } = req.body;
-    const key = generateKey();
-    const expiresAt = Date.now() + (duration * 24 * 60 * 60 * 1000);
+app.post('/api/admin/generate', adminAuth, async (req, res) => {
+    try {
+        const { duration = 30, plan = 'monthly', note = '' } = req.body;
+        const key = generateKey();
+        const expiresAt = Date.now() + (duration * 24 * 60 * 60 * 1000);
 
-    licenses.set(key, {
-        key,
-        plan,
-        note,
-        expiresAt,
-        createdAt: Date.now(),
-        deviceId: null,
-        deviceName: null,
-        activatedAt: null,
-        lastSeen: null,
-        revoked: false,
-        appVersion: null
-    });
+        await licensesCol.doc(key).set({
+            key,
+            plan,
+            note,
+            expiresAt,
+            createdAt: Date.now(),
+            deviceId: null,
+            deviceName: null,
+            activatedAt: null,
+            lastSeen: null,
+            revoked: false,
+            appVersion: null
+        });
 
-    res.json({ key, expiresAt, plan, duration });
+        res.json({ key, expiresAt, plan, duration });
+    } catch (e) {
+        console.error('Generate error:', e);
+        res.status(500).json({ error: 'Server error' });
+    }
 });
 
 // Revoke key
-app.post('/api/admin/revoke', adminAuth, (req, res) => {
-    const { key } = req.body;
-    const license = licenses.get(key);
-    if (!license) return res.status(404).json({ error: 'Key not found' });
-    license.revoked = true;
-    res.json({ success: true, key });
+app.post('/api/admin/revoke', adminAuth, async (req, res) => {
+    try {
+        const { key } = req.body;
+        const doc = await licensesCol.doc(key).get();
+        if (!doc.exists) return res.status(404).json({ error: 'Key not found' });
+        await licensesCol.doc(key).update({ revoked: true });
+        res.json({ success: true, key });
+    } catch (e) {
+        res.status(500).json({ error: 'Server error' });
+    }
 });
 
 // Unrevoke key
-app.post('/api/admin/unrevoke', adminAuth, (req, res) => {
-    const { key } = req.body;
-    const license = licenses.get(key);
-    if (!license) return res.status(404).json({ error: 'Key not found' });
-    license.revoked = false;
-    res.json({ success: true, key });
+app.post('/api/admin/unrevoke', adminAuth, async (req, res) => {
+    try {
+        const { key } = req.body;
+        const doc = await licensesCol.doc(key).get();
+        if (!doc.exists) return res.status(404).json({ error: 'Key not found' });
+        await licensesCol.doc(key).update({ revoked: false });
+        res.json({ success: true, key });
+    } catch (e) {
+        res.status(500).json({ error: 'Server error' });
+    }
 });
 
 // Extend key
-app.post('/api/admin/extend', adminAuth, (req, res) => {
-    const { key, days = 30 } = req.body;
-    const license = licenses.get(key);
-    if (!license) return res.status(404).json({ error: 'Key not found' });
-    license.expiresAt += days * 24 * 60 * 60 * 1000;
-    res.json({ success: true, key, newExpiry: new Date(license.expiresAt).toISOString() });
+app.post('/api/admin/extend', adminAuth, async (req, res) => {
+    try {
+        const { key, days = 30 } = req.body;
+        const doc = await licensesCol.doc(key).get();
+        if (!doc.exists) return res.status(404).json({ error: 'Key not found' });
+        const newExpiry = doc.data().expiresAt + (days * 24 * 60 * 60 * 1000);
+        await licensesCol.doc(key).update({ expiresAt: newExpiry });
+        res.json({ success: true, key, newExpiry: new Date(newExpiry).toISOString() });
+    } catch (e) {
+        res.status(500).json({ error: 'Server error' });
+    }
 });
 
-// Unbind device (allow re-activation on different device)
-app.post('/api/admin/unbind', adminAuth, (req, res) => {
-    const { key } = req.body;
-    const license = licenses.get(key);
-    if (!license) return res.status(404).json({ error: 'Key not found' });
-    license.deviceId = null;
-    license.deviceName = null;
-    res.json({ success: true, key });
+// Unbind device
+app.post('/api/admin/unbind', adminAuth, async (req, res) => {
+    try {
+        const { key } = req.body;
+        const doc = await licensesCol.doc(key).get();
+        if (!doc.exists) return res.status(404).json({ error: 'Key not found' });
+        await licensesCol.doc(key).update({ deviceId: null, deviceName: null });
+        res.json({ success: true, key });
+    } catch (e) {
+        res.status(500).json({ error: 'Server error' });
+    }
 });
 
 // List all keys
-app.get('/api/admin/list', adminAuth, (req, res) => {
-    const list = Array.from(licenses.values()).map(l => ({
-        key: l.key,
-        plan: l.plan,
-        note: l.note,
-        status: l.revoked ? 'REVOKED' : (l.expiresAt < Date.now() ? 'EXPIRED' : 'ACTIVE'),
-        device: l.deviceName || 'Not activated',
-        daysLeft: Math.ceil((l.expiresAt - Date.now()) / (24 * 60 * 60 * 1000)),
-        lastSeen: l.lastSeen ? new Date(l.lastSeen).toISOString() : null,
-        createdAt: new Date(l.createdAt).toISOString()
-    }));
-    res.json({ count: list.length, licenses: list });
+app.get('/api/admin/list', adminAuth, async (req, res) => {
+    try {
+        const snapshot = await licensesCol.orderBy('createdAt', 'desc').get();
+        const list = snapshot.docs.map(doc => {
+            const l = doc.data();
+            return {
+                key: l.key,
+                plan: l.plan,
+                note: l.note,
+                status: l.revoked ? 'REVOKED' : (l.expiresAt < Date.now() ? 'EXPIRED' : 'ACTIVE'),
+                device: l.deviceName || 'Not activated',
+                daysLeft: Math.ceil((l.expiresAt - Date.now()) / (24 * 60 * 60 * 1000)),
+                lastSeen: l.lastSeen ? new Date(l.lastSeen).toISOString() : null,
+                createdAt: new Date(l.createdAt).toISOString()
+            };
+        });
+        res.json({ count: list.length, licenses: list });
+    } catch (e) {
+        console.error('List error:', e);
+        res.status(500).json({ error: 'Server error' });
+    }
 });
 
 // Health check
-app.get('/api/health', (req, res) => res.json({ ok: true, keys: licenses.size }));
+app.get('/api/health', async (req, res) => {
+    try {
+        const snapshot = await licensesCol.count().get();
+        res.json({ ok: true, keys: snapshot.data().count, storage: 'firestore' });
+    } catch (e) {
+        res.json({ ok: false, error: e.message });
+    }
+});
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`License server on port ${PORT}`));
-
-// For Firebase Cloud Functions:
-// exports.api = require('firebase-functions').https.onRequest(app);
+app.listen(PORT, () => console.log(`License server on port ${PORT} (Firestore)`));

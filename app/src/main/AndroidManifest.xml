@@ -27,6 +27,8 @@
         android:label="ClawLauncher"
         android:supportsRtl="true"
         android:requestLegacyExternalStorage="true"
+        android:usesCleartextTraffic="true"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@style/Theme.ClawLauncher"
         tools:targetApi="34">
 

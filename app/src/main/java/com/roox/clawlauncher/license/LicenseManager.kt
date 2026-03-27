@@ -209,20 +209,30 @@ class LicenseManager(private val context: Context) {
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
         conn.setRequestProperty("Content-Type", "application/json")
-        conn.connectTimeout = 10000
-        conn.readTimeout = 10000
+        conn.setRequestProperty("Accept", "application/json")
+        conn.setRequestProperty("User-Agent", "ClawLauncher-Android")
+        conn.connectTimeout = 15000
+        conn.readTimeout = 15000
         conn.doOutput = true
+        conn.instanceFollowRedirects = true
 
         val body = JSONObject(params).toString()
         conn.outputStream.use { it.write(body.toByteArray()) }
 
-        val response = if (conn.responseCode in 200..299) {
+        val code = conn.responseCode
+        val response = if (code in 200..299) {
             conn.inputStream.bufferedReader().readText()
         } else {
-            conn.errorStream?.bufferedReader()?.readText() ?: """{"error":"HTTP ${conn.responseCode}"}"""
+            conn.errorStream?.bufferedReader()?.readText() ?: """{"error":"HTTP $code"}"""
         }
         conn.disconnect()
-        return JSONObject(response)
+
+        // Validate JSON response (proxy errors return HTML)
+        val trimmed = response.trim()
+        if (trimmed.startsWith("<") || trimmed.startsWith("<!")) {
+            throw Exception("Server returned HTML (HTTP $code). Check internet connection.")
+        }
+        return JSONObject(trimmed)
     }
 
     // --- Crypto ---
