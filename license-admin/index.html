@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClawLauncher — License Admin</title>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+
+        /* Login Screen */
+        .login-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            gap: 24px;
+        }
+        .login-logo { font-size: 64px; }
+        .login-title { font-size: 28px; font-weight: 700; color: #fff; }
+        .login-subtitle { font-size: 14px; color: #888; }
+        .google-btn {
+            display: flex; align-items: center; gap: 12px;
+            background: #1a1a2e; border: 1px solid #333;
+            color: #fff; padding: 14px 32px; border-radius: 12px;
+            font-size: 16px; cursor: pointer; transition: all 0.2s;
+        }
+        .google-btn:hover { background: #2a2a3e; border-color: #E53935; }
+        .google-btn img { width: 24px; height: 24px; }
+
+        /* Main App */
+        .app { display: none; }
+        .app.active { display: block; }
+
+        /* Header */
+        .header {
+            background: #111;
+            border-bottom: 1px solid #222;
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .header-left { display: flex; align-items: center; gap: 12px; }
+        .header-title { font-size: 18px; font-weight: 700; }
+        .header-user {
+            display: flex; align-items: center; gap: 8px;
+            background: #1a1a2e; padding: 6px 12px; border-radius: 20px;
+        }
+        .header-user img { width: 28px; height: 28px; border-radius: 50%; }
+        .header-user span { font-size: 13px; color: #aaa; }
+        .logout-btn {
+            background: none; border: 1px solid #333;
+            color: #E53935; padding: 6px 14px; border-radius: 8px;
+            cursor: pointer; font-size: 12px;
+        }
+        .logout-btn:hover { background: #E53935; color: #fff; }
+
+        /* Stats Bar */
+        .stats-bar {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+            padding: 20px 24px;
+        }
+        .stat-card {
+            background: #151515;
+            border: 1px solid #222;
+            border-radius: 12px;
+            padding: 16px;
+            text-align: center;
+        }
+        .stat-value { font-size: 28px; font-weight: 700; }
+        .stat-label { font-size: 11px; color: #888; margin-top: 4px; }
+        .stat-active .stat-value { color: #4CAF50; }
+        .stat-expired .stat-value { color: #FFC107; }
+        .stat-revoked .stat-value { color: #E53935; }
+        .stat-total .stat-value { color: #2196F3; }
+
+        /* Toolbar */
+        .toolbar {
+            padding: 0 24px 16px;
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .generate-btn {
+            background: #E53935;
+            color: #fff;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .generate-btn:hover { background: #c62828; transform: scale(1.02); }
+        .search-input {
+            flex: 1;
+            min-width: 200px;
+            background: #151515;
+            border: 1px solid #333;
+            color: #fff;
+            padding: 10px 16px;
+            border-radius: 10px;
+            font-size: 14px;
+            outline: none;
+        }
+        .search-input:focus { border-color: #E53935; }
+        .filter-btn {
+            background: #151515;
+            border: 1px solid #333;
+            color: #aaa;
+            padding: 10px 16px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .filter-btn.active { border-color: #E53935; color: #E53935; }
+
+        /* License Table */
+        .table-container { padding: 0 24px 24px; overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; }
+        th {
+            background: #151515;
+            padding: 12px 16px;
+            text-align: right;
+            font-size: 11px;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            border-bottom: 1px solid #222;
+        }
+        td {
+            padding: 12px 16px;
+            border-bottom: 1px solid #1a1a1a;
+            font-size: 13px;
+        }
+        tr:hover td { background: #111; }
+        .key-cell {
+            font-family: 'Courier New', monospace;
+            font-weight: 600;
+            color: #fff;
+            cursor: pointer;
+        }
+        .key-cell:hover { color: #E53935; }
+
+        /* Status Badge */
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .badge-active { background: #4CAF5022; color: #4CAF50; }
+        .badge-expired { background: #FFC10722; color: #FFC107; }
+        .badge-revoked { background: #E5393522; color: #E53935; }
+
+        /* Actions */
+        .action-btn {
+            background: none;
+            border: 1px solid #333;
+            color: #aaa;
+            padding: 4px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 11px;
+            margin: 0 2px;
+        }
+        .action-btn:hover { border-color: #E53935; color: #E53935; }
+        .action-btn.danger { border-color: #E53935; color: #E53935; }
+        .action-btn.success { border-color: #4CAF50; color: #4CAF50; }
+
+        /* Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 200;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal {
+            background: #151515;
+            border: 1px solid #333;
+            border-radius: 16px;
+            padding: 32px;
+            width: min(420px, 90vw);
+        }
+        .modal h3 { font-size: 18px; margin-bottom: 20px; color: #fff; }
+        .modal label { display: block; font-size: 12px; color: #888; margin-bottom: 6px; }
+        .modal input, .modal select {
+            width: 100%;
+            background: #0a0a0a;
+            border: 1px solid #333;
+            color: #fff;
+            padding: 10px 14px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-size: 14px;
+            outline: none;
+        }
+        .modal input:focus, .modal select:focus { border-color: #E53935; }
+        .modal-actions { display: flex; gap: 12px; margin-top: 8px; }
+        .modal-actions button {
+            flex: 1;
+            padding: 10px;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .btn-primary { background: #E53935; color: #fff; }
+        .btn-secondary { background: #222; color: #aaa; }
+
+        /* Key Display */
+        .new-key-display {
+            background: #0a0a0a;
+            border: 2px solid #4CAF50;
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            margin: 16px 0;
+        }
+        .new-key-display .key {
+            font-family: 'Courier New', monospace;
+            font-size: 24px;
+            font-weight: 700;
+            color: #4CAF50;
+            letter-spacing: 2px;
+        }
+        .copy-btn {
+            margin-top: 12px;
+            background: #4CAF50;
+            color: #fff;
+            border: none;
+            padding: 8px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        /* Toast */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: #333;
+            color: #fff;
+            padding: 12px 24px;
+            border-radius: 10px;
+            font-size: 14px;
+            transition: transform 0.3s;
+            z-index: 300;
+        }
+        .toast.show { transform: translateX(-50%) translateY(0); }
+        .toast.success { background: #2e7d32; }
+        .toast.error { background: #c62828; }
+
+        /* Loading */
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #888;
+        }
+        .spinner {
+            display: inline-block;
+            width: 32px; height: 32px;
+            border: 3px solid #333;
+            border-top-color: #E53935;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        @media (max-width: 600px) {
+            .stats-bar { grid-template-columns: repeat(2, 1fr); }
+            th, td { padding: 8px 10px; font-size: 12px; }
+            .header { padding: 12px 16px; }
+            .toolbar, .table-container { padding: 0 16px 16px; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- Login Screen -->
+<div class="login-screen" id="loginScreen">
+    <div class="login-logo">🦀</div>
+    <div class="login-title">ClawLauncher Admin</div>
+    <div class="login-subtitle">إدارة مفاتيح الاشتراك</div>
+    <button class="google-btn" onclick="signInWithGoogle()">
+        <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google">
+        تسجيل الدخول بـ Google
+    </button>
+    <div style="display:flex;align-items:center;gap:12px;color:#555;margin:8px 0">
+        <hr style="flex:1;border-color:#333"><span>أو</span><hr style="flex:1;border-color:#333">
+    </div>
+    <div style="display:flex;gap:8px;width:100%;max-width:340px">
+        <input type="password" id="adminKeyInput" placeholder="🔑 Admin Key"
+            style="flex:1;background:#1a1a2e;border:1px solid #333;color:#fff;padding:14px 16px;border-radius:12px;font-size:14px;outline:none"
+            onkeydown="if(event.key==='Enter')adminKeyLogin()">
+        <button onclick="adminKeyLogin()" style="background:#E53935;color:#fff;border:none;padding:14px 20px;border-radius:12px;cursor:pointer;font-weight:600">دخول</button>
+    </div>
+    <div id="loginError" style="color:#E53935;font-size:13px;display:none"></div>
+</div>
+
+<!-- Main App -->
+<div class="app" id="mainApp">
+    <!-- Header -->
+    <div class="header">
+        <div class="header-left">
+            <span style="font-size:24px">🦀</span>
+            <span class="header-title">License Admin</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px">
+            <div class="header-user">
+                <img id="userAvatar" src="" alt="">
+                <span id="userName"></span>
+            </div>
+            <button class="logout-btn" onclick="signOut()">خروج</button>
+        </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats-bar">
+        <div class="stat-card stat-total">
+            <div class="stat-value" id="statTotal">-</div>
+            <div class="stat-label">إجمالي المفاتيح</div>
+        </div>
+        <div class="stat-card stat-active">
+            <div class="stat-value" id="statActive">-</div>
+            <div class="stat-label">نشط</div>
+        </div>
+        <div class="stat-card stat-expired">
+            <div class="stat-value" id="statExpired">-</div>
+            <div class="stat-label">منتهي</div>
+        </div>
+        <div class="stat-card stat-revoked">
+            <div class="stat-value" id="statRevoked">-</div>
+            <div class="stat-label">موقوف</div>
+        </div>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="toolbar">
+        <button class="generate-btn" onclick="showGenerateModal()">+ مفتاح جديد</button>
+        <input type="text" class="search-input" id="searchInput" placeholder="🔍 بحث بالمفتاح أو الملاحظة..." oninput="filterLicenses()">
+        <button class="filter-btn active" data-filter="all" onclick="setFilter('all')">الكل</button>
+        <button class="filter-btn" data-filter="ACTIVE" onclick="setFilter('ACTIVE')">نشط</button>
+        <button class="filter-btn" data-filter="EXPIRED" onclick="setFilter('EXPIRED')">منتهي</button>
+        <button class="filter-btn" data-filter="REVOKED" onclick="setFilter('REVOKED')">موقوف</button>
+    </div>
+
+    <!-- Table -->
+    <div class="table-container">
+        <div class="loading" id="tableLoading">
+            <div class="spinner"></div>
+            <p style="margin-top:12px">جاري التحميل...</p>
+        </div>
+        <table id="licenseTable" style="display:none">
+            <thead>
+                <tr>
+                    <th>المفتاح</th>
+                    <th>الحالة</th>
+                    <th>الخطة</th>
+                    <th>الملاحظة</th>
+                    <th>الجهاز</th>
+                    <th>متبقي</th>
+                    <th>آخر ظهور</th>
+                    <th>إجراءات</th>
+                </tr>
+            </thead>
+            <tbody id="licenseBody"></tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Generate Modal -->
+<div class="modal-overlay" id="generateModal">
+    <div class="modal">
+        <h3>🔑 إنشاء مفتاح جديد</h3>
+        <label>المدة (بالأيام)</label>
+        <input type="number" id="genDuration" value="30" min="1" max="3650">
+        <label>الخطة</label>
+        <select id="genPlan">
+            <option value="monthly">شهري — Monthly</option>
+            <option value="quarterly">ربع سنوي — Quarterly</option>
+            <option value="yearly">سنوي — Yearly</option>
+            <option value="lifetime">مدى الحياة — Lifetime</option>
+        </select>
+        <label>ملاحظة (اسم المشترك)</label>
+        <input type="text" id="genNote" placeholder="اسم المشترك...">
+        <div id="generatedKeyDisplay" style="display:none">
+            <div class="new-key-display">
+                <div class="key" id="generatedKey"></div>
+            </div>
+            <button class="copy-btn" onclick="copyKey()" style="width:100%">📋 نسخ المفتاح</button>
+        </div>
+        <div class="modal-actions" id="genActions">
+            <button class="btn-secondary" onclick="closeModal('generateModal')">إلغاء</button>
+            <button class="btn-primary" onclick="generateKey()">إنشاء</button>
+        </div>
+    </div>
+</div>
+
+<!-- Extend Modal -->
+<div class="modal-overlay" id="extendModal">
+    <div class="modal">
+        <h3>⏰ تمديد اشتراك</h3>
+        <p style="color:#888;margin-bottom:16px;font-size:13px" id="extendKeyLabel"></p>
+        <label>عدد الأيام</label>
+        <input type="number" id="extendDays" value="30" min="1" max="3650">
+        <div class="modal-actions">
+            <button class="btn-secondary" onclick="closeModal('extendModal')">إلغاء</button>
+            <button class="btn-primary" onclick="extendKey()">تمديد</button>
+        </div>
+    </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+    const API = 'https://claw-license.clawrun.app/api';
+    const ADMIN_KEY = 'claw-roox-admin-2026';
+    // Allowed Google account email(s)
+    const ALLOWED_EMAILS = ['rroot4546@gmail.com'];
+
+    let allLicenses = [];
+    let currentFilter = 'all';
+    let extendingKey = '';
+
+    // Firebase config
+    firebase.initializeApp({
+        apiKey: "AIzaSyCwiXv2c8V4u4raAMV8MGYc4HhOZUJcnB8",
+        authDomain: "clawlauncher-license.firebaseapp.com",
+        projectId: "clawlauncher-license"
+    });
+
+    const auth = firebase.auth();
+    const provider = new firebase.auth.GoogleAuthProvider();
+
+    let loggedIn = false;
+
+    // Check saved session
+    if (sessionStorage.getItem('admin_auth') === ADMIN_KEY) {
+        showApp('Admin');
+    }
+
+    // Auth state listener (Google)
+    auth.onAuthStateChanged(user => {
+        if (loggedIn) return; // already logged in via admin key
+        if (user && ALLOWED_EMAILS.includes(user.email)) {
+            showApp(user.displayName || user.email, user.photoURL);
+        } else if (user) {
+            auth.signOut();
+            showLoginError('هذا الحساب غير مسموح.');
+        }
+    });
+
+    function showApp(name, avatar) {
+        loggedIn = true;
+        document.getElementById('loginScreen').style.display = 'none';
+        document.getElementById('mainApp').classList.add('active');
+        document.getElementById('userAvatar').src = avatar || '';
+        document.getElementById('userAvatar').style.display = avatar ? 'block' : 'none';
+        document.getElementById('userName').textContent = name;
+        loadLicenses();
+    }
+
+    function adminKeyLogin() {
+        const key = document.getElementById('adminKeyInput').value.trim();
+        if (key === ADMIN_KEY) {
+            sessionStorage.setItem('admin_auth', key);
+            showApp('Admin 🔑');
+        } else {
+            showLoginError('مفتاح خاطئ!');
+        }
+    }
+
+    function signInWithGoogle() {
+        auth.signInWithRedirect(provider).catch(err => {
+            showLoginError(err.message);
+        });
+    }
+
+    // Handle redirect result
+    auth.getRedirectResult().catch(err => {
+        if (err.code) showLoginError(err.message);
+    });
+
+    function signOut() {
+        sessionStorage.removeItem('admin_auth');
+        loggedIn = false;
+        auth.signOut();
+        document.getElementById('loginScreen').style.display = 'flex';
+        document.getElementById('mainApp').classList.remove('active');
+    }
+
+    function showLoginError(msg) {
+        const el = document.getElementById('loginError');
+        el.textContent = msg;
+        el.style.display = 'block';
+    }
+
+    // API calls
+    async function apiCall(endpoint, method = 'GET', body = null) {
+        const opts = {
+            method,
+            headers: {
+                'Authorization': `Bearer ${ADMIN_KEY}`,
+                'Content-Type': 'application/json'
+            }
+        };
+        if (body) opts.body = JSON.stringify(body);
+        const res = await fetch(`${API}/${endpoint}`, opts);
+        return res.json();
+    }
+
+    async function loadLicenses() {
+        document.getElementById('tableLoading').style.display = 'block';
+        document.getElementById('licenseTable').style.display = 'none';
+        try {
+            const data = await apiCall('admin/list');
+            allLicenses = data.licenses || [];
+            updateStats();
+            renderTable();
+        } catch (e) {
+            showToast('خطأ بالتحميل: ' + e.message, 'error');
+        }
+        document.getElementById('tableLoading').style.display = 'none';
+        document.getElementById('licenseTable').style.display = 'table';
+    }
+
+    function updateStats() {
+        const active = allLicenses.filter(l => l.status === 'ACTIVE').length;
+        const expired = allLicenses.filter(l => l.status === 'EXPIRED').length;
+        const revoked = allLicenses.filter(l => l.status === 'REVOKED').length;
+        document.getElementById('statTotal').textContent = allLicenses.length;
+        document.getElementById('statActive').textContent = active;
+        document.getElementById('statExpired').textContent = expired;
+        document.getElementById('statRevoked').textContent = revoked;
+    }
+
+    function renderTable() {
+        const search = document.getElementById('searchInput').value.toLowerCase();
+        let filtered = allLicenses;
+
+        if (currentFilter !== 'all') {
+            filtered = filtered.filter(l => l.status === currentFilter);
+        }
+        if (search) {
+            filtered = filtered.filter(l =>
+                l.key.toLowerCase().includes(search) ||
+                (l.note || '').toLowerCase().includes(search) ||
+                (l.device || '').toLowerCase().includes(search)
+            );
+        }
+
+        const tbody = document.getElementById('licenseBody');
+        tbody.innerHTML = filtered.map(l => `
+            <tr>
+                <td class="key-cell" onclick="copyText('${l.key}')" title="اضغط للنسخ">${l.key}</td>
+                <td><span class="badge badge-${l.status.toLowerCase()}">${statusAr(l.status)}</span></td>
+                <td>${l.plan}</td>
+                <td>${l.note || '—'}</td>
+                <td>${l.device || 'غير مفعل'}</td>
+                <td>${l.daysLeft > 0 ? l.daysLeft + ' يوم' : 'منتهي'}</td>
+                <td style="font-size:11px;color:#666">${l.lastSeen ? timeAgo(l.lastSeen) : '—'}</td>
+                <td>
+                    ${l.status === 'ACTIVE' ? `
+                        <button class="action-btn danger" onclick="revokeKey('${l.key}')">إيقاف</button>
+                        <button class="action-btn" onclick="showExtendModal('${l.key}')">تمديد</button>
+                    ` : l.status === 'REVOKED' ? `
+                        <button class="action-btn success" onclick="unrevokeKey('${l.key}')">تفعيل</button>
+                    ` : `
+                        <button class="action-btn" onclick="showExtendModal('${l.key}')">تمديد</button>
+                    `}
+                    ${l.device !== 'Not activated' && l.device !== 'غير مفعل' ? `
+                        <button class="action-btn" onclick="unbindKey('${l.key}')">فك ربط</button>
+                    ` : ''}
+                </td>
+            </tr>
+        `).join('');
+    }
+
+    function statusAr(s) {
+        return { ACTIVE: 'نشط', EXPIRED: 'منتهي', REVOKED: 'موقوف' }[s] || s;
+    }
+
+    function timeAgo(isoStr) {
+        const diff = Date.now() - new Date(isoStr).getTime();
+        const mins = Math.floor(diff / 60000);
+        if (mins < 60) return `${mins} دقيقة`;
+        const hrs = Math.floor(mins / 60);
+        if (hrs < 24) return `${hrs} ساعة`;
+        return `${Math.floor(hrs / 24)} يوم`;
+    }
+
+    function setFilter(f) {
+        currentFilter = f;
+        document.querySelectorAll('.filter-btn').forEach(b => {
+            b.classList.toggle('active', b.dataset.filter === f);
+        });
+        renderTable();
+    }
+
+    function filterLicenses() { renderTable(); }
+
+    // Generate
+    function showGenerateModal() {
+        document.getElementById('generatedKeyDisplay').style.display = 'none';
+        document.getElementById('genActions').style.display = 'flex';
+        document.getElementById('genNote').value = '';
+        document.getElementById('genDuration').value = '30';
+        document.getElementById('generateModal').classList.add('active');
+    }
+
+    async function generateKey() {
+        const duration = parseInt(document.getElementById('genDuration').value);
+        const plan = document.getElementById('genPlan').value;
+        const note = document.getElementById('genNote').value;
+
+        try {
+            const data = await apiCall('admin/generate', 'POST', { duration, plan, note });
+            document.getElementById('generatedKey').textContent = data.key;
+            document.getElementById('generatedKeyDisplay').style.display = 'block';
+            document.getElementById('genActions').style.display = 'none';
+            showToast('✅ مفتاح جديد!', 'success');
+            loadLicenses();
+        } catch (e) {
+            showToast('خطأ: ' + e.message, 'error');
+        }
+    }
+
+    function copyKey() {
+        const key = document.getElementById('generatedKey').textContent;
+        copyText(key);
+    }
+
+    // Revoke / Unrevoke
+    async function revokeKey(key) {
+        if (!confirm(`إيقاف المفتاح ${key}؟`)) return;
+        try {
+            await apiCall('admin/revoke', 'POST', { key });
+            showToast('🚫 تم الإيقاف', 'success');
+            loadLicenses();
+        } catch (e) { showToast('خطأ', 'error'); }
+    }
+
+    async function unrevokeKey(key) {
+        try {
+            await apiCall('admin/unrevoke', 'POST', { key });
+            showToast('✅ تم التفعيل', 'success');
+            loadLicenses();
+        } catch (e) { showToast('خطأ', 'error'); }
+    }
+
+    // Extend
+    function showExtendModal(key) {
+        extendingKey = key;
+        document.getElementById('extendKeyLabel').textContent = key;
+        document.getElementById('extendDays').value = '30';
+        document.getElementById('extendModal').classList.add('active');
+    }
+
+    async function extendKey() {
+        const days = parseInt(document.getElementById('extendDays').value);
+        try {
+            await apiCall('admin/extend', 'POST', { key: extendingKey, days });
+            closeModal('extendModal');
+            showToast(`⏰ تم التمديد ${days} يوم`, 'success');
+            loadLicenses();
+        } catch (e) { showToast('خطأ', 'error'); }
+    }
+
+    // Unbind
+    async function unbindKey(key) {
+        if (!confirm(`فك ربط الجهاز من ${key}؟`)) return;
+        try {
+            await apiCall('admin/unbind', 'POST', { key });
+            showToast('🔓 تم فك الربط', 'success');
+            loadLicenses();
+        } catch (e) { showToast('خطأ', 'error'); }
+    }
+
+    // Helpers
+    function closeModal(id) {
+        document.getElementById(id).classList.remove('active');
+    }
+
+    function copyText(text) {
+        navigator.clipboard.writeText(text).then(() => {
+            showToast('📋 تم النسخ!', 'success');
+        });
+    }
+
+    function showToast(msg, type = '') {
+        const el = document.getElementById('toast');
+        el.textContent = msg;
+        el.className = 'toast show ' + type;
+        setTimeout(() => el.className = 'toast', 3000);
+    }
+
+    // Close modals on overlay click
+    document.querySelectorAll('.modal-overlay').forEach(el => {
+        el.addEventListener('click', e => {
+            if (e.target === el) el.classList.remove('active');
+        });
+    });
+</script>
+</body>
+</html>
