@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: claw-license
+    runtime: node
+    plan: free
+    rootDir: license-server
+    buildCommand: npm install
+    startCommand: node index.js
+    envVars:
+      - key: PORT
+        value: 3001
+      - key: ADMIN_KEY
+        value: claw-roox-admin-2026
+      - key: NODE_ENV
+        value: production
