@@ -81,6 +81,9 @@ dependencies {
     // OkHttp for downloading
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
+    // AdMob
+    implementation("com.google.android.gms:play-services-ads:23.0.0")
+
     // Node.js binary is bundled as native lib (jniLibs/arm64-v8a/libnode.so)
     // npm is bundled as assets/npm/ — extracted at setup time
 
