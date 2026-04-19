@@ -213,8 +213,12 @@ jobs:
           "$APKSIGNER" verify --verbose "$APK"
           echo "APK size: $(ls -lh "$APK" | awk '{print $5}')"
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - name: Create Release and Upload APK
+        uses: softprops/action-gh-release@v2
         with:
-          name: ClawLauncher-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          tag_name: build-latest
+          name: Latest Build
+          files: app/build/outputs/apk/debug/app-debug.apk
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
