@@ -13,12 +13,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.lifecycleScope
+import com.roox.clawlauncher.ads.AdManager
 import com.roox.clawlauncher.engine.BackupManager
 import com.roox.clawlauncher.engine.BootstrapManager
 import com.roox.clawlauncher.engine.ConfigManager
 import com.roox.clawlauncher.engine.ProcessManager
-import com.roox.clawlauncher.license.LicenseManager
-import com.roox.clawlauncher.license.LicenseState
 import com.roox.clawlauncher.service.BatteryHelper
 import com.roox.clawlauncher.ui.screens.*
 import com.roox.clawlauncher.ui.theme.*
@@ -31,7 +30,6 @@ class MainActivity : ComponentActivity() {
     private lateinit var processManager: ProcessManager
     private lateinit var bootstrapManager: BootstrapManager
     private lateinit var backupManager: BackupManager
-    private lateinit var licenseManager: LicenseManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -40,10 +38,8 @@ class MainActivity : ComponentActivity() {
         processManager = ProcessManager(this, configManager)
         bootstrapManager = BootstrapManager(this)
         backupManager = BackupManager(this)
-        licenseManager = LicenseManager(this)
 
-        // Verify license on startup
-        lifecycleScope.launch { licenseManager.verify() }
+        AdManager.initialize(this)
 
         // Request notification permission on start
         if (!PermissionHelper.hasNotificationPermission(this)) {
@@ -65,25 +61,6 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     fun MainApp() {
-        val licenseStatus by licenseManager.status.collectAsState()
-        var isActivating by remember { mutableStateOf(false) }
-
-        // Gate: License must be valid to access the app
-        if (!licenseManager.isValid() && licenseStatus.state != LicenseState.CHECKING) {
-            LicenseScreen(
-                status = licenseStatus,
-                onActivate = { key ->
-                    isActivating = true
-                    lifecycleScope.launch {
-                        licenseManager.activate(key)
-                        isActivating = false
-                    }
-                },
-                isLoading = isActivating || licenseStatus.state == LicenseState.CHECKING
-            )
-            return
-        }
-
         val serverStatus by processManager.status.collectAsState()
         val setupProgress by bootstrapManager.progress.collectAsState()
         val restorePoints by backupManager.restorePoints.collectAsState()
