@@ -22,6 +22,7 @@ import com.roox.clawlauncher.service.BatteryHelper
 import com.roox.clawlauncher.ui.screens.*
 import com.roox.clawlauncher.ui.theme.*
 import com.roox.clawlauncher.util.PermissionHelper
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -40,6 +41,12 @@ class MainActivity : ComponentActivity() {
         backupManager = BackupManager(this)
 
         AdManager.initialize(this)
+
+        // Show interstitial ad after 3 seconds
+        lifecycleScope.launch {
+            delay(3000)
+            AdManager.showInterstitial(this@MainActivity)
+        }
 
         // Request notification permission on start
         if (!PermissionHelper.hasNotificationPermission(this)) {
