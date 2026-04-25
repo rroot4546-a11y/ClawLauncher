@@ -51,9 +51,14 @@ class ProcessManager(private val context: Context, private val configManager: Co
 
     val isInstalled: Boolean get() = nodeBin.exists() && (openclawMain != null || bootstrapManager.isOpenClawInstalled)
 
-    init {
-        checkState()
-    }
+    // Note: deliberately no eager `checkState()` call here. Construction is
+    // performed on the main thread during MainActivity.onCreate, and
+    // `checkState()` walks the filesystem (BootstrapManager.getDiskUsage uses
+    // recursive disk traversal). MainActivity now triggers the first
+    // `refreshState()` from a background coroutine after setContent so the
+    // first frame is not blocked. Until that runs the StateFlow exposes the
+    // default `ServerStatus(state = NOT_INSTALLED)` value, which the UI
+    // already renders correctly.
 
     private fun checkState() {
         if (isInstalled) {

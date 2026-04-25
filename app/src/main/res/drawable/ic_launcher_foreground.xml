@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive icon foreground: stylised red claw / pincer. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Soft red shadow behind the claw -->
+    <path android:pathData="M54,54m-30,0a30,30 0,1 1,60 0a30,30 0,1 1,-60 0">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:centerX="54"
+                android:centerY="54"
+                android:gradientRadius="30"
+                android:type="radial">
+                <item android:offset="0.0" android:color="#55E53935" />
+                <item android:offset="1.0" android:color="#00B71C1C" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Upper pincer arm (curved blade) -->
+    <path android:pathData="M54,54
+        C50,40 48,30 60,24
+        C72,18 84,22 86,32
+        C88,42 80,48 72,46
+        C66,45 62,42 60,38
+        C58,34 54,38 54,54 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="54" android:startY="20"
+                android:endX="86"  android:endY="48"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FFFF5252" />
+                <item android:offset="1.0" android:color="#FFB71C1C" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Lower pincer arm (mirror of upper) -->
+    <path android:pathData="M54,54
+        C50,68 48,78 60,84
+        C72,90 84,86 86,76
+        C88,66 80,60 72,62
+        C66,63 62,66 60,70
+        C58,74 54,70 54,54 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="54" android:startY="88"
+                android:endX="86"  android:endY="60"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FFFF5252" />
+                <item android:offset="1.0" android:color="#FFB71C1C" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Central hinge / arm joint -->
+    <path
+        android:fillColor="#FFE53935"
+        android:pathData="M54,54m-12,0a12,12 0,1 1,24 0a12,12 0,1 1,-24 0" />
+
+    <!-- Highlight on hinge -->
+    <path
+        android:fillColor="#33FFFFFF"
+        android:pathData="M50,50m-4,0a4,4 0,1 1,8 0a4,4 0,1 1,-8 0" />
+
+    <!-- Arm extending left to body (anchor) -->
+    <path
+        android:fillColor="#FFB71C1C"
+        android:pathData="M22,46 L48,50 L48,58 L22,62 C18,58 18,50 22,46 Z" />
+</vector>
