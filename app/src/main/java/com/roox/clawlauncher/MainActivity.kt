@@ -70,6 +70,7 @@ class MainActivity : ComponentActivity() {
     fun MainApp() {
         val serverStatus by processManager.status.collectAsState()
         val setupProgress by bootstrapManager.progress.collectAsState()
+        val updateInfo by bootstrapManager.updateInfo.collectAsState()
         val restorePoints by backupManager.restorePoints.collectAsState()
         var hasStoragePerm by remember { mutableStateOf(PermissionHelper.hasStoragePermission(this@MainActivity)) }
 
@@ -166,7 +167,9 @@ class MainActivity : ComponentActivity() {
                 progress = setupProgress,
                 isNodeInstalled = bootstrapManager.isNodeInstalled,
                 isOpenClawInstalled = bootstrapManager.isOpenClawInstalled,
+                updateInfo = updateInfo,
                 onStartSetup = { lifecycleScope.launch { bootstrapManager.runSetup() } },
+                onCheckUpdates = { lifecycleScope.launch { bootstrapManager.checkForUpdates() } },
                 onUpdate = { lifecycleScope.launch { bootstrapManager.updateOpenClaw() } },
                 onBack = {
                     // Force re-check when returning from setup

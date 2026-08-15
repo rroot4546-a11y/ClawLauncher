@@ -5,6 +5,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.File
 import java.io.FileOutputStream
@@ -27,9 +30,23 @@ data class SetupProgress(
     val downloadedBytes: Long = 0
 )
 
+data class OpenClawUpdateInfo(
+    val isChecking: Boolean = false,
+    val installedVersion: String? = null,
+    val latestVersion: String? = null,
+    val isUpdateAvailable: Boolean = false,
+    val checkedAt: Long? = null,
+    val error: String? = null
+)
+
 class BootstrapManager(private val context: Context) {
     private val _progress = MutableStateFlow(SetupProgress())
     val progress: StateFlow<SetupProgress> = _progress
+    private val _updateInfo = MutableStateFlow(OpenClawUpdateInfo())
+    val updateInfo: StateFlow<OpenClawUpdateInfo> = _updateInfo
+    private val httpClient = OkHttpClient.Builder()
+        .callTimeout(20, TimeUnit.SECONDS)
+        .build()
 
     val baseDir: File get() = File(context.filesDir, "openclaw")
     val nodeBin: File get() = File(context.applicationInfo.nativeLibraryDir, "libnode.so")
@@ -79,6 +96,55 @@ class BootstrapManager(private val context: Context) {
 
     fun getDiskUsage(): Long {
         return dirSize(baseDir)
+    }
+
+    suspend fun checkForUpdates() {
+        _updateInfo.value = _updateInfo.value.copy(isChecking = true, error = null)
+        withContext(Dispatchers.IO) {
+            try {
+                val installed = getOpenClawVersion()
+                val request = Request.Builder()
+                    .url("https://registry.npmjs.org/openclaw/latest")
+                    .header("Accept", "application/json")
+                    .build()
+                httpClient.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) throw Exception("npm registry returned HTTP ${response.code}")
+                    val body = response.body?.string().orEmpty()
+                    val latest = JSONObject(body).optString("version").takeIf { it.isNotBlank() }
+                        ?: throw Exception("Latest version was not found")
+                    _updateInfo.value = OpenClawUpdateInfo(
+                        isChecking = false,
+                        installedVersion = installed,
+                        latestVersion = latest,
+                        isUpdateAvailable = installed == null || compareVersions(latest, installed) > 0,
+                        checkedAt = System.currentTimeMillis()
+                    )
+                }
+            } catch (e: Exception) {
+                _updateInfo.value = _updateInfo.value.copy(
+                    isChecking = false,
+                    installedVersion = getOpenClawVersion(),
+                    checkedAt = System.currentTimeMillis(),
+                    error = e.message ?: "Could not check for updates"
+                )
+            }
+        }
+    }
+
+    private fun compareVersions(left: String, right: String): Int {
+        val leftParts = left.split(Regex("[^0-9]+"))
+            .filter { it.isNotBlank() }
+            .map { it.toIntOrNull() ?: 0 }
+        val rightParts = right.split(Regex("[^0-9]+"))
+            .filter { it.isNotBlank() }
+            .map { it.toIntOrNull() ?: 0 }
+        val size = maxOf(leftParts.size, rightParts.size)
+        for (index in 0 until size) {
+            val l = leftParts.getOrElse(index) { 0 }
+            val r = rightParts.getOrElse(index) { 0 }
+            if (l != r) return l.compareTo(r)
+        }
+        return 0
     }
 
     private fun dirSize(dir: File): Long {
@@ -415,21 +481,39 @@ process.on('unhandledRejection', (reason, promise) => {
     }
 
     suspend fun updateOpenClaw() {
-        _progress.value = SetupProgress(isRunning = true, step = "Updating...", progress = 0.1f)
+        _progress.value = SetupProgress(isRunning = true, step = "Updating OpenClaw...", progress = 0.1f)
         withContext(Dispatchers.IO) {
             try {
                 val env = buildEnv()
                 val exit = runCmdLines(env, baseDir,
                     nodeBin.absolutePath, npmCli.absolutePath,
-                    "update", "openclaw", "--prefix", baseDir.absolutePath
-                ) { log("  $it") }
+                    "install", "openclaw@latest",
+                    "--prefix", baseDir.absolutePath,
+                    "--no-audit", "--no-fund", "--ignore-scripts", "--force"
+                ) { line ->
+                    log("  $line")
+                    _progress.value = _progress.value.copy(
+                        step = "Updating OpenClaw...",
+                        npmLine = line.take(100),
+                        progress = (_progress.value.progress + 0.002f).coerceAtMost(0.92f)
+                    )
+                }
                 if (exit != 0) throw Exception("Update failed (exit: $exit)")
-                // Re-resolve path
                 val entry = findOpenclawEntry()
                 if (entry != null) saveOpenclawPath(entry.absolutePath)
+                val installed = getOpenClawVersion()
+                _updateInfo.value = _updateInfo.value.copy(
+                    installedVersion = installed,
+                    isUpdateAvailable = false,
+                    error = null,
+                    checkedAt = System.currentTimeMillis()
+                )
                 _progress.value = SetupProgress(
-                    isRunning = false, step = "Updated!", progress = 1f,
-                    isComplete = true, log = _progress.value.log
+                    isRunning = false,
+                    step = "OpenClaw updated${installed?.let { " to v$it" } ?: ""}!",
+                    progress = 1f,
+                    isComplete = true,
+                    log = _progress.value.log
                 )
             } catch (e: Exception) {
                 log("❌ ${e.message}")

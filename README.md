@@ -43,5 +43,15 @@ Node.js → OpenClaw Gateway (localhost:3000)
 - OkHttp for downloads
 - Process management via ProcessBuilder
 
+## OpenClaw Updates
+
+Open the **Setup** screen after OpenClaw is installed and press **Check** in the OpenClaw updates card. ClawLauncher checks the official npm registry, compares the installed package version with the latest published version, and shows the result. Updating remains an explicit user action through **Update OpenClaw**; the app does not silently replace the installed package.
+
+## Custom AI Providers
+
+Open **Settings → Custom AI Providers** to add an OpenAI-compatible service. You can choose a popular preset or enter a custom provider ID, display name, Base URL, API key, API format, and comma-separated model IDs. The settings are persisted under OpenClaw's `models.providers` configuration and the selected model is used as the primary `provider/model` reference.
+
+The provider form supports local services such as Ollama and LM Studio as well as hosted services such as Groq, DeepSeek, Together AI, Fireworks AI, Mistral, xAI, and Perplexity. For local services, the API key can be left empty.
+
 ## License
 Private — All Rights Reserved © 2026

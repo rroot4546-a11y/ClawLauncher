@@ -17,6 +17,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.roox.clawlauncher.engine.OpenClawUpdateInfo
 import com.roox.clawlauncher.engine.SetupProgress
 import com.roox.clawlauncher.ui.theme.*
 
@@ -26,7 +27,9 @@ fun SetupScreen(
     progress: SetupProgress,
     isNodeInstalled: Boolean,
     isOpenClawInstalled: Boolean,
+    updateInfo: OpenClawUpdateInfo,
     onStartSetup: () -> Unit,
+    onCheckUpdates: () -> Unit,
     onUpdate: () -> Unit,
     onBack: () -> Unit
 ) {
@@ -97,14 +100,47 @@ fun SetupScreen(
                 } else {
                     Text("Everything is installed! \u2705", fontSize = 15.sp, color = ClawGreen)
                     Spacer(modifier = Modifier.height(16.dp))
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(ClawCardBg, RoundedCornerShape(12.dp))
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("OpenClaw updates", color = ClawTextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            val versionText = when {
+                                updateInfo.isChecking -> "Checking npm registry..."
+                                updateInfo.error != null -> "Check failed: ${updateInfo.error}"
+                                updateInfo.latestVersion != null && updateInfo.isUpdateAvailable ->
+                                    "Installed v${updateInfo.installedVersion ?: "unknown"} • New v${updateInfo.latestVersion}"
+                                updateInfo.latestVersion != null -> "You are up to date (v${updateInfo.installedVersion ?: updateInfo.latestVersion})"
+                                else -> "Check the official npm registry for a newer version"
+                            }
+                            Text(versionText, color = if (updateInfo.error != null) ClawRed else ClawTextSecondary, fontSize = 11.sp)
+                        }
+                        if (updateInfo.isChecking) {
+                            CircularProgressIndicator(modifier = Modifier.size(22.dp), color = ClawBlue, strokeWidth = 2.dp)
+                        } else {
+                            TextButton(onClick = onCheckUpdates) {
+                                Text("Check", color = ClawBlue)
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
                     OutlinedButton(
                         onClick = onUpdate,
+                        enabled = !updateInfo.isChecking && (updateInfo.isUpdateAvailable || updateInfo.latestVersion == null),
                         modifier = Modifier.fillMaxWidth().height(48.dp),
                         shape = RoundedCornerShape(14.dp)
                     ) {
                         Icon(Icons.Default.Refresh, contentDescription = null, tint = ClawBlue)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Update OpenClaw", color = ClawBlue)
+                        Text(
+                            if (updateInfo.isUpdateAvailable) "Update OpenClaw" else "Update / Reinstall OpenClaw",
+                            color = if (!updateInfo.isChecking) ClawBlue else ClawTextSecondary
+                        )
                     }
                     Spacer(modifier = Modifier.height(12.dp))
                     Button(

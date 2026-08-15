@@ -9,14 +9,32 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
+data class CustomAiProvider(
+    val id: String,
+    val name: String,
+    val baseUrl: String,
+    val apiKey: String = "",
+    val api: String = "openai-completions",
+    val models: List<String> = emptyList()
+)
+
+data class ProviderPreset(
+    val id: String,
+    val name: String,
+    val baseUrl: String,
+    val api: String = "openai-completions",
+    val models: List<String>
+)
+
 data class ClawConfig(
     // Telegram
     val telegramBotToken: String = "",
     val telegramAllowedUsers: List<String> = emptyList(),
     // AI Model
-    val aiProvider: String = "openrouter", // openrouter, google, openai, anthropic, gemini-cli
+    val aiProvider: String = "openrouter", // built-in provider or custom provider id
     val aiApiKey: String = "",
     val aiModel: String = "anthropic/claude-sonnet-4",
+    val customAiProviders: List<CustomAiProvider> = emptyList(),
     // Server
     val port: Int = 3000,
     // WhatsApp
@@ -36,10 +54,11 @@ class ConfigManager(private val context: Context) {
     val baseDir: File get() = File(context.filesDir, "openclaw")
     val workspaceDir: File get() = File(baseDir, "workspace")
     val configFile: File get() = File(baseDir, "openclaw.json")
-    // Secondary config location inside .openclaw subdirectory
     private val dotOpenclawDir: File get() = File(baseDir, ".openclaw")
     private val secondaryConfigFile: File get() = File(dotOpenclawDir, "openclaw.json")
     private val envFile: File get() = File(baseDir, ".env")
+
+    private val builtInProviderIds = listOf("openrouter", "google", "openai", "anthropic", "gemini-cli")
 
     init {
         baseDir.mkdirs()
@@ -49,51 +68,47 @@ class ConfigManager(private val context: Context) {
     }
 
     private fun loadConfig() {
-        // Try secondary location first (.openclaw/), then primary
         val file = if (secondaryConfigFile.exists()) secondaryConfigFile
-                   else if (configFile.exists()) configFile
-                   else return
+        else if (configFile.exists()) configFile
+        else return
+
         try {
             val json = JSONObject(file.readText())
 
-            // Read Telegram: channels.telegram.botToken (correct schema)
             val telegram = json.optJSONObject("channels")?.optJSONObject("telegram")
             val botToken = telegram?.optString("botToken", "")
-                ?: telegram?.optString("token", "") // fallback old format
+                ?: telegram?.optString("token", "")
                 ?: ""
             val allowedUsers = telegram?.optJSONArray("allowedUsers")
                 ?.let { arr -> (0 until arr.length()).map { arr.getString(it) } }
                 ?: emptyList()
 
-            // Read model: agents.defaults.model.primary
-            val model = json.optJSONObject("agents")
+            val rawPrimary = json.optJSONObject("agents")
                 ?.optJSONObject("defaults")
                 ?.optJSONObject("model")
                 ?.optString("primary", "")
-                ?: json.optString("model", "anthropic/claude-sonnet-4")
+                ?: json.optString("model", "")
 
-            // Read port: gateway.port
-            val port = json.optJSONObject("gateway")?.optInt("port", 3000)
-                ?: json.optInt("port", 3000)
-
-            // Read Discord: channels.discord.botToken
             val discordToken = json.optJSONObject("channels")?.optJSONObject("discord")
                 ?.optString("botToken", "")
                 ?: json.optJSONObject("channels")?.optJSONObject("discord")
                     ?.optString("token", "")
                 ?: ""
 
-            // Read API key from .env file
+            val customProviders = parseCustomProviders(json.optJSONObject("models")?.optJSONObject("providers"))
+            val providerAndModel = parseProviderAndModel(rawPrimary, customProviders)
+
             var apiKey = ""
-            var provider = "openrouter"
-            val envContent = if (envFile.exists()) envFile.readText() else
-                if (File(dotOpenclawDir, ".env").exists()) File(dotOpenclawDir, ".env").readText() else ""
+            var provider = providerAndModel.first
+            val envContent = if (envFile.exists()) envFile.readText()
+            else if (File(dotOpenclawDir, ".env").exists()) File(dotOpenclawDir, ".env").readText()
+            else ""
             for (line in envContent.lines()) {
                 when {
                     line.startsWith("OPENROUTER_API_KEY=") -> {
                         apiKey = line.substringAfter("="); provider = "openrouter"
                     }
-                    line.startsWith("GEMINI_API_KEY=") -> {
+                    line.startsWith("GEMINI_API_KEY=") || line.startsWith("GOOGLE_API_KEY=") -> {
                         apiKey = line.substringAfter("="); provider = "google"
                     }
                     line.startsWith("OPENAI_API_KEY=") -> {
@@ -105,65 +120,98 @@ class ConfigManager(private val context: Context) {
                 }
             }
 
+            if (providerAndModel.first in customProviders.map { it.id }) {
+                apiKey = customProviders.first { it.id == providerAndModel.first }.apiKey
+            }
+
+            val model = providerAndModel.second.ifBlank {
+                if (provider == "openrouter") "anthropic/claude-sonnet-4" else ""
+            }
+            val port = json.optJSONObject("gateway")?.optInt("port", 3000)
+                ?: json.optInt("port", 3000)
+
             _config.value = ClawConfig(
                 telegramBotToken = botToken,
                 telegramAllowedUsers = allowedUsers,
                 aiProvider = provider,
                 aiApiKey = apiKey,
                 aiModel = model,
+                customAiProviders = customProviders,
                 port = port,
                 discordBotToken = discordToken
             )
-        } catch (_: Exception) { }
+        } catch (_: Exception) {
+            // Keep defaults when an older or partially-written config cannot be parsed.
+        }
+    }
+
+    private fun parseProviderAndModel(
+        rawPrimary: String,
+        customProviders: List<CustomAiProvider>
+    ): Pair<String, String> {
+        if (rawPrimary.isBlank()) return "openrouter" to "anthropic/claude-sonnet-4"
+        val providerIds = builtInProviderIds + customProviders.map { it.id }
+        val provider = providerIds.firstOrNull { rawPrimary.startsWith("$it/") || rawPrimary == it }
+            ?: "openrouter"
+        val model = if (rawPrimary == provider) "" else rawPrimary.removePrefix("$provider/")
+        return provider to model
+    }
+
+    private fun parseCustomProviders(providersJson: JSONObject?): List<CustomAiProvider> {
+        if (providersJson == null) return emptyList()
+        val result = mutableListOf<CustomAiProvider>()
+        val keys = providersJson.keys()
+        while (keys.hasNext()) {
+            val id = keys.next()
+            if (id in builtInProviderIds) continue
+            val provider = providersJson.optJSONObject(id) ?: continue
+            val models = provider.optJSONArray("models")?.let { arr ->
+                (0 until arr.length()).mapNotNull { index ->
+                    val item = arr.opt(index)
+                    when (item) {
+                        is JSONObject -> item.optString("id").takeIf { it.isNotBlank() }
+                        else -> item?.toString()?.takeIf { it.isNotBlank() }
+                    }
+                }
+            } ?: emptyList()
+            result += CustomAiProvider(
+                id = id,
+                name = provider.optString("name", id),
+                baseUrl = provider.optString("baseUrl", ""),
+                apiKey = provider.optString("apiKey", ""),
+                api = provider.optString("api", "openai-completions"),
+                models = models
+            )
+        }
+        return result
     }
 
     fun updateConfig(newConfig: ClawConfig) {
         _config.value = newConfig
     }
 
-    // Returns true if the given provider requires an API key
-    fun providerRequiresApiKey(provider: String): Boolean {
-        return provider != "gemini-cli"
-    }
+    fun isCustomProvider(provider: String): Boolean = _config.value.customAiProviders.any { it.id == provider }
+
+    fun getProviderIds(): List<String> = builtInProviderIds + _config.value.customAiProviders.map { it.id }
+
+    fun getCustomProvider(provider: String): CustomAiProvider? =
+        _config.value.customAiProviders.firstOrNull { it.id == provider }
+
+    fun providerRequiresApiKey(provider: String): Boolean = provider != "gemini-cli"
 
     suspend fun saveConfig() {
         withContext(Dispatchers.IO) {
             val c = _config.value
             val json = JSONObject()
 
-            // Gateway settings (correct schema)
             val gateway = JSONObject()
             gateway.put("mode", "local")
             gateway.put("bind", "loopback")
             gateway.put("port", c.port)
             json.put("gateway", gateway)
 
-            // Agents → defaults → model → primary (correct schema)
-            // Model needs provider prefix for OpenClaw
-            // OpenRouter: "openrouter/google/gemini-2.0-flash-001"
-            // Google direct: "google/gemini-2.0-flash"
-            // Anthropic direct: "anthropic/claude-sonnet-4"
-            val fullModel = when (c.aiProvider) {
-                "openrouter" -> {
-                    val m = c.aiModel
-                    if (m.startsWith("openrouter/")) m else "openrouter/$m"
-                }
-                "google" -> {
-                    val m = c.aiModel
-                    if (m.startsWith("google/")) m else "google/$m"
-                }
-                "anthropic" -> {
-                    val m = c.aiModel
-                    if (m.startsWith("anthropic/")) m else "anthropic/$m"
-                }
-                "openai" -> {
-                    val m = c.aiModel
-                    if (m.startsWith("openai/")) m else "openai/$m"
-                }
-                else -> c.aiModel
-            }
             val modelObj = JSONObject()
-            modelObj.put("primary", fullModel)
+            modelObj.put("primary", fullModelRef(c.aiProvider, c.aiModel))
             val defaults = JSONObject()
             defaults.put("model", modelObj)
             defaults.put("workspace", File(dotOpenclawDir, "workspace").absolutePath)
@@ -171,8 +219,25 @@ class ConfigManager(private val context: Context) {
             agents.put("defaults", defaults)
             json.put("agents", agents)
 
-            // Auth profiles in config
-            if (c.aiApiKey.isNotBlank()) {
+            if (c.customAiProviders.isNotEmpty()) {
+                val providerObjects = JSONObject()
+                c.customAiProviders.forEach { custom ->
+                    val providerJson = JSONObject()
+                    providerJson.put("name", custom.name)
+                    providerJson.put("baseUrl", custom.baseUrl.trim().trimEnd('/'))
+                    providerJson.put("api", custom.api)
+                    if (custom.apiKey.isNotBlank()) providerJson.put("apiKey", custom.apiKey)
+                    val models = JSONArray()
+                    custom.models.filter { it.isNotBlank() }.forEach { modelId ->
+                        models.put(JSONObject().put("id", modelId.trim()).put("name", modelId.trim()))
+                    }
+                    providerJson.put("models", models)
+                    providerObjects.put(custom.id, providerJson)
+                }
+                json.put("models", JSONObject().put("mode", "merge").put("providers", providerObjects))
+            }
+
+            if (c.aiApiKey.isNotBlank() && !isCustomProvider(c.aiProvider)) {
                 val authObj = JSONObject()
                 val profilesObj = JSONObject()
                 val profileKey = "${c.aiProvider}:default"
@@ -184,85 +249,57 @@ class ConfigManager(private val context: Context) {
                 json.put("auth", authObj)
             }
 
-            // Channels (correct schema: botToken not token)
             val channels = JSONObject()
-
             if (c.telegramBotToken.isNotBlank()) {
                 val telegram = JSONObject()
                 telegram.put("botToken", c.telegramBotToken)
                 telegram.put("enabled", true)
                 telegram.put("dmPolicy", "open")
-                telegram.put("allowFrom", org.json.JSONArray(listOf("*")))
+                telegram.put("allowFrom", JSONArray(listOf("*")))
                 channels.put("telegram", telegram)
             }
-
             if (c.discordBotToken.isNotBlank()) {
                 val discord = JSONObject()
                 discord.put("botToken", c.discordBotToken)
                 discord.put("enabled", true)
                 channels.put("discord", discord)
             }
-
-            if (channels.length() > 0) {
-                json.put("channels", channels)
-            }
+            if (channels.length() > 0) json.put("channels", channels)
 
             val configText = json.toString(2)
-
-            // Write to BOTH config locations
             configFile.writeText(configText)
             dotOpenclawDir.mkdirs()
             secondaryConfigFile.writeText(configText)
 
-            // Write .env with API key for the provider
             val envLines = mutableListOf<String>()
             when (c.aiProvider) {
-                "openrouter" -> {
-                    if (c.aiApiKey.isNotBlank()) envLines.add("OPENROUTER_API_KEY=${c.aiApiKey}")
-                }
-                "google" -> {
-                    if (c.aiApiKey.isNotBlank()) envLines.add("GEMINI_API_KEY=${c.aiApiKey}")
-                }
-                "openai" -> {
-                    if (c.aiApiKey.isNotBlank()) envLines.add("OPENAI_API_KEY=${c.aiApiKey}")
-                }
-                "anthropic" -> {
-                    if (c.aiApiKey.isNotBlank()) envLines.add("ANTHROPIC_API_KEY=${c.aiApiKey}")
-                }
-                "gemini-cli" -> { }
+                "openrouter" -> if (c.aiApiKey.isNotBlank()) envLines.add("OPENROUTER_API_KEY=${c.aiApiKey}")
+                "google" -> if (c.aiApiKey.isNotBlank()) envLines.add("GEMINI_API_KEY=${c.aiApiKey}")
+                "openai" -> if (c.aiApiKey.isNotBlank()) envLines.add("OPENAI_API_KEY=${c.aiApiKey}")
+                "anthropic" -> if (c.aiApiKey.isNotBlank()) envLines.add("ANTHROPIC_API_KEY=${c.aiApiKey}")
+                "gemini-cli" -> Unit
             }
-
-            // Write .env to BOTH locations
-            val envContent = envLines.joinToString("\n") + "\n"
             if (envLines.isNotEmpty()) {
+                val envContent = envLines.joinToString("\n") + "\n"
                 envFile.writeText(envContent)
                 File(dotOpenclawDir, ".env").writeText(envContent)
             }
 
-            // Write auth-profiles.json (how OpenClaw ACTUALLY stores API keys)
-            // OpenClaw resolves: HOME/.openclaw/ as config dir, then looks for
-            // .openclaw/agents/ inside THAT dir = HOME/.openclaw/.openclaw/agents/
-            if (c.aiApiKey.isNotBlank()) {
+            if (c.aiApiKey.isNotBlank() && !isCustomProvider(c.aiProvider)) {
                 val provider = c.aiProvider
-                val profileKey = "$provider:default"
-                val authProfiles = JSONObject()
-                authProfiles.put("version", 1)
-                val profiles = JSONObject()
+                val authProfiles = JSONObject().put("version", 1)
                 val profile = JSONObject()
-                profile.put("key", c.aiApiKey)
-                profile.put("provider", provider)
-                profile.put("type", "api_key")
-                profiles.put(profileKey, profile)
-                authProfiles.put("profiles", profiles)
-
+                    .put("key", c.aiApiKey)
+                    .put("provider", provider)
+                    .put("type", "api_key")
+                authProfiles.put("profiles", JSONObject().put("$provider:default", profile))
                 val authJson = authProfiles.toString(2)
-                // Write to ALL possible locations OpenClaw might look
                 val paths = listOf(
                     File(dotOpenclawDir, "agents/main/agent"),
                     File(dotOpenclawDir, ".openclaw/agents/main/agent"),
                     File(baseDir, "agents/main/agent")
                 )
-                for (path in paths) {
+                paths.forEach { path ->
                     path.mkdirs()
                     File(path, "auth-profiles.json").writeText(authJson)
                 }
@@ -272,67 +309,102 @@ class ConfigManager(private val context: Context) {
         }
     }
 
+    private fun fullModelRef(provider: String, model: String): String {
+        if (model.isBlank()) return model
+        return if (model.startsWith("$provider/")) model else "$provider/$model"
+    }
+
     private fun ensureWorkspaceFiles() {
         val agentsMd = File(workspaceDir, "AGENTS.md")
-        if (!agentsMd.exists()) {
-            agentsMd.writeText("# AGENTS.md\n\nYour workspace.\n")
-        }
+        if (!agentsMd.exists()) agentsMd.writeText("# AGENTS.md\n\nYour workspace.\n")
         val soulMd = File(workspaceDir, "SOUL.md")
-        if (!soulMd.exists()) {
-            soulMd.writeText("# SOUL.md\n\nWho you are.\n")
-        }
+        if (!soulMd.exists()) soulMd.writeText("# SOUL.md\n\nWho you are.\n")
     }
 
     fun getAvailableModels(): Map<String, List<Pair<String, String>>> {
         return mapOf(
             "openrouter" to listOf(
-                // Free models first
-                "google/gemini-2.0-flash-001" to "🆓 Gemini 2.0 Flash (Free)",
-                "google/gemini-2.5-pro-preview-05-06" to "🆓 Gemini 2.5 Pro (Free)",
-                "meta-llama/llama-3.3-70b-instruct" to "🆓 Llama 3.3 70B (Free)",
-                "deepseek/deepseek-r1-0528" to "🆓 DeepSeek R1 (Free)",
-                "qwen/qwen3-235b-a22b" to "🆓 Qwen 3 235B (Free)",
-                // Recommended paid
-                "anthropic/claude-sonnet-4" to "💰 Claude Sonnet 4",
-                "anthropic/claude-haiku-4" to "💰 Claude Haiku 4 (Fast)",
-                "anthropic/claude-opus-4" to "💰 Claude Opus 4 (Best)",
-                // OpenAI
-                "openai/gpt-4o" to "💰 GPT-4o",
-                "openai/gpt-4o-mini" to "💰 GPT-4o Mini (Cheap)",
-                "openai/o3-mini" to "💰 o3-mini (Reasoning)",
-                // Others
-                "deepseek/deepseek-v3-0324" to "💰 DeepSeek V3 (Fast)",
-                "mistralai/mistral-large-latest" to "💰 Mistral Large",
-                "x-ai/grok-2" to "💰 Grok 2",
+                "google/gemini-2.5-flash" to "Gemini 2.5 Flash",
+                "google/gemini-2.5-pro" to "Gemini 2.5 Pro",
+                "anthropic/claude-sonnet-4" to "Claude Sonnet 4",
+                "anthropic/claude-opus-4" to "Claude Opus 4",
+                "openai/gpt-4o" to "GPT-4o",
+                "openai/gpt-4o-mini" to "GPT-4o Mini",
+                "deepseek/deepseek-chat" to "DeepSeek Chat",
+                "deepseek/deepseek-r1" to "DeepSeek R1",
+                "meta-llama/llama-3.3-70b-instruct" to "Llama 3.3 70B",
+                "qwen/qwen-2.5-72b-instruct" to "Qwen 2.5 72B",
+                "mistralai/mistral-large" to "Mistral Large",
+                "x-ai/grok-3-mini-beta" to "Grok 3 Mini"
             ),
             "google" to listOf(
-                // Free tier models (Gemini API key)
-                "gemini-2.5-pro-preview-05-06" to "🆓 Gemini 2.5 Pro (Best!)",
-                "gemini-2.5-flash-preview-05-20" to "🆓 Gemini 2.5 Flash (Fast!)",
-                "gemini-2.0-flash" to "🆓 Gemini 2.0 Flash",
-                "gemini-2.0-flash-lite" to "🆓 Gemini 2.0 Flash Lite (Fastest)",
-                "gemini-1.5-pro" to "Gemini 1.5 Pro",
-                "gemini-1.5-flash" to "Gemini 1.5 Flash",
+                "gemini-3.1-pro-preview" to "Gemini 3.1 Pro Preview",
+                "gemini-3.5-flash" to "Gemini 3.5 Flash",
+                "gemini-2.5-pro" to "Gemini 2.5 Pro",
+                "gemini-2.5-flash" to "Gemini 2.5 Flash",
+                "gemini-2.0-flash" to "Gemini 2.0 Flash"
             ),
             "openai" to listOf(
-                "gpt-4o" to "GPT-4o (Best)",
-                "gpt-4o-mini" to "GPT-4o Mini (Cheap)",
-                "gpt-4-turbo" to "GPT-4 Turbo",
-                "o1-mini" to "o1-mini (Reasoning)",
-                "o3-mini" to "o3-mini (Reasoning)",
+                "gpt-5.6-sol" to "GPT-5.6 Sol",
+                "gpt-5.5" to "GPT-5.5",
+                "gpt-4o" to "GPT-4o",
+                "gpt-4o-mini" to "GPT-4o Mini",
+                "o3-mini" to "o3-mini"
             ),
             "anthropic" to listOf(
-                "claude-sonnet-4-20250514" to "Claude Sonnet 4 (Recommended)",
-                "claude-haiku-4-20250514" to "Claude Haiku 4 (Fast)",
-                "claude-opus-4-20250514" to "Claude Opus 4 (Best)",
+                "claude-opus-5" to "Claude Opus 5",
+                "claude-sonnet-4" to "Claude Sonnet 4",
+                "claude-haiku-4" to "Claude Haiku 4"
             ),
             "gemini-cli" to listOf(
-                "gemini-2.5-pro" to "Gemini 2.5 Pro (Default)",
-                "gemini-2.0-flash" to "Gemini 2.0 Flash (Fast)",
-                "gemini-2.0-flash-lite" to "Gemini 2.0 Flash Lite (Lite)",
+                "gemini-2.5-pro" to "Gemini 2.5 Pro",
+                "gemini-2.0-flash" to "Gemini 2.0 Flash"
             )
         )
     }
+
+    fun getPopularProviderPresets(): List<ProviderPreset> = listOf(
+        ProviderPreset(
+            "openrouter-custom", "OpenRouter (OpenAI-compatible)", "https://openrouter.ai/api/v1",
+            models = listOf("openai/gpt-4o-mini", "anthropic/claude-sonnet-4", "google/gemini-2.5-flash", "deepseek/deepseek-chat")
+        ),
+        ProviderPreset(
+            "groq", "Groq", "https://api.groq.com/openai/v1",
+            models = listOf("llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768")
+        ),
+        ProviderPreset(
+            "deepseek", "DeepSeek", "https://api.deepseek.com/v1",
+            models = listOf("deepseek-chat", "deepseek-reasoner")
+        ),
+        ProviderPreset(
+            "together", "Together AI", "https://api.together.xyz/v1",
+            models = listOf("meta-llama/Llama-3.3-70B-Instruct-Turbo", "Qwen/Qwen2.5-72B-Instruct-Turbo", "deepseek-ai/DeepSeek-R1")
+        ),
+        ProviderPreset(
+            "fireworks", "Fireworks AI", "https://api.fireworks.ai/inference/v1",
+            models = listOf("accounts/fireworks/models/llama-v3p3-70b-instruct", "accounts/fireworks/models/deepseek-r1")
+        ),
+        ProviderPreset(
+            "mistral-custom", "Mistral AI (OpenAI-compatible)", "https://api.mistral.ai/v1",
+            models = listOf("mistral-large-latest", "mistral-small-latest", "codestral-latest")
+        ),
+        ProviderPreset(
+            "xai", "xAI", "https://api.x.ai/v1",
+            models = listOf("grok-3-latest", "grok-3-mini-latest")
+        ),
+        ProviderPreset(
+            "perplexity", "Perplexity", "https://api.perplexity.ai",
+            models = listOf("sonar", "sonar-pro", "sonar-reasoning-pro")
+        ),
+        ProviderPreset(
+            "ollama", "Ollama (Local)", "http://127.0.0.1:11434/v1",
+            models = listOf("llama3.3", "qwen2.5", "deepseek-r1")
+        ),
+        ProviderPreset(
+            "lmstudio", "LM Studio (Local)", "http://127.0.0.1:1234/v1",
+            models = listOf("local-model")
+        )
+    )
 
     fun getProviderName(id: String): String = when (id) {
         "openrouter" -> "OpenRouter (Multi-provider)"
@@ -340,7 +412,7 @@ class ConfigManager(private val context: Context) {
         "openai" -> "OpenAI"
         "anthropic" -> "Anthropic"
         "gemini-cli" -> "Gemini (Google Account)"
-        else -> id
+        else -> _config.value.customAiProviders.firstOrNull { it.id == id }?.name ?: id
     }
 
     fun getProviderKeyHint(id: String): String = when (id) {
@@ -349,6 +421,6 @@ class ConfigManager(private val context: Context) {
         "openai" -> "sk-..."
         "anthropic" -> "sk-ant-..."
         "gemini-cli" -> ""
-        else -> "API Key"
+        else -> "API key (optional for local providers)"
     }
 }
