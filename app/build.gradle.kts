@@ -41,6 +41,15 @@ android {
     }
     kotlinOptions {
         jvmTarget = "1.8"
+        // Compose compiler 1.5.4+ strong-skipping mode: lets the runtime skip
+        // recomposition for composables that take unstable parameters when
+        // those parameter values are referentially equal to the previous
+        // composition. Cuts unnecessary recompositions in screens that pass
+        // captured lambdas without `remember { }` wrappers.
+        freeCompilerArgs += listOf(
+            "-P",
+            "plugin:androidx.compose.compiler.plugins.kotlin:experimentalStrongSkipping=true"
+        )
     }
     buildFeatures {
         compose = true
@@ -77,6 +86,9 @@ dependencies {
 
     // Core
     implementation("androidx.core:core-ktx:1.12.0")
+
+    // Splash screen API (instant launch icon while app initialises)
+    implementation("androidx.core:core-splashscreen:1.0.1")
 
     // OkHttp for downloading
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

@@ -1,6 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Base app theme. -->
     <style name="Theme.ClawLauncher" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#FF121212</item>
+        <item name="android:navigationBarColor">#FF121212</item>
+        <item name="android:windowBackground">@color/claw_dark_bg</item>
+    </style>
+
+    <!--
+        Splash-screen theme. Inherits from the AndroidX SplashScreen theme so
+        that the OS shows our claw icon on a dark red-tinted background while
+        the app process is starting; control returns to the regular theme as
+        soon as `installSplashScreen()` runs in MainActivity.onCreate().
+    -->
+    <style name="Theme.ClawLauncher.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/claw_dark_bg</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="windowSplashScreenAnimationDuration">300</item>
+        <item name="postSplashScreenTheme">@style/Theme.ClawLauncher</item>
         <item name="android:statusBarColor">#FF121212</item>
         <item name="android:navigationBarColor">#FF121212</item>
     </style>

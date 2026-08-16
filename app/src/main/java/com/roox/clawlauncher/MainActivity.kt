@@ -12,7 +12,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.roox.clawlauncher.ads.AdManager
 import com.roox.clawlauncher.engine.BackupManager
 import com.roox.clawlauncher.engine.BootstrapManager
@@ -22,17 +25,24 @@ import com.roox.clawlauncher.service.BatteryHelper
 import com.roox.clawlauncher.ui.screens.*
 import com.roox.clawlauncher.ui.theme.*
 import com.roox.clawlauncher.util.PermissionHelper
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.io.File
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
+    // Managers are created up-front (cheap object construction) but any disk
+    // I/O they perform during `init {}` is offloaded to a background coroutine
+    // so the first frame paints immediately.
     private lateinit var configManager: ConfigManager
     private lateinit var processManager: ProcessManager
     private lateinit var bootstrapManager: BootstrapManager
     private lateinit var backupManager: BackupManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Install the SplashScreen API BEFORE super.onCreate so the OS shows
+        // our launcher icon immediately while the app process warms up.
+        installSplashScreen()
         super.onCreate(savedInstanceState)
 
         configManager = ConfigManager(this)
@@ -40,55 +50,102 @@ class MainActivity : ComponentActivity() {
         bootstrapManager = BootstrapManager(this)
         backupManager = BackupManager(this)
 
-        AdManager.initialize(this)
-
-        // Show interstitial ad after 3 seconds
-        lifecycleScope.launch {
-            delay(3000)
-            AdManager.showInterstitial(this@MainActivity)
-        }
-
-        // Request notification permission on start
-        if (!PermissionHelper.hasNotificationPermission(this)) {
-            PermissionHelper.requestNotificationPermission(this)
-        }
-
+        // Render the UI ASAP. All heavy/idle work (AdMob init, ad loading,
+        // first state refresh) is dispatched off the main thread so the
+        // first frame is not blocked.
         setContent {
             ClawLauncherTheme {
                 MainApp()
+            }
+        }
+
+        // Defer non-UI work to after the first frame: AdMob init does
+        // disk + network on a background thread, but its first call still
+        // touches main-thread state on some devices.
+        lifecycleScope.launch(Dispatchers.IO) {
+            AdManager.initialize(this@MainActivity)
+        }
+
+        // Show interstitial ad after a longer delay so it never competes with
+        // first paint or the user's first interaction.
+        lifecycleScope.launch {
+            // Wait until the activity has resumed at least once before doing
+            // anything that could pause animation.
+            repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                delay(8_000)
+                AdManager.showInterstitial(this@MainActivity)
+            }
+        }
+
+        // Permission prompt is very cheap but we still defer it so it doesn't
+        // happen during the first frame's measure/layout pass.
+        lifecycleScope.launch {
+            if (!PermissionHelper.hasNotificationPermission(this@MainActivity)) {
+                PermissionHelper.requestNotificationPermission(this@MainActivity)
             }
         }
     }
 
     override fun onResume() {
         super.onResume()
-        // Refresh state when returning to the app (e.g., from browser or permission settings)
-        processManager.refreshState()
+        // Refresh state when returning to the app (e.g., from browser or
+        // permission settings). Done on a background dispatcher to avoid
+        // any disk reads on the main thread.
+        lifecycleScope.launch(Dispatchers.IO) {
+            processManager.refreshState()
+        }
     }
 
     @Composable
     fun MainApp() {
+        // Hot state observed once at the top level; downstream composables read
+        // only the slices they need so re-composition stays cheap.
         val serverStatus by processManager.status.collectAsState()
         val setupProgress by bootstrapManager.progress.collectAsState()
         val updateInfo by bootstrapManager.updateInfo.collectAsState()
         val restorePoints by backupManager.restorePoints.collectAsState()
-        var hasStoragePerm by remember { mutableStateOf(PermissionHelper.hasStoragePermission(this@MainActivity)) }
 
-        // Re-check permission on recomposition
-        LaunchedEffect(Unit) {
-            hasStoragePerm = PermissionHelper.hasStoragePermission(this@MainActivity)
+        // SharedPreferences and battery-status are read once outside of
+        // composition (no I/O on every recomposition). They are refreshed on
+        // RESUME via the LaunchedEffect below.
+        val prefs = remember {
+            this@MainActivity.getSharedPreferences("claw_prefs", Context.MODE_PRIVATE)
+        }
+        var hasStoragePerm by remember {
+            mutableStateOf(PermissionHelper.hasStoragePermission(this@MainActivity))
+        }
+        var autoStart by remember {
+            mutableStateOf(prefs.getBoolean("auto_start_on_boot", false))
+        }
+        var isBatteryOptimized by remember {
+            mutableStateOf(!BatteryHelper.isIgnoringBatteryOptimizations(this@MainActivity))
         }
 
-        var currentScreen by remember { mutableStateOf("main") }
-        var selectedTab by remember { mutableIntStateOf(0) }
+        // Refresh ambient state cheaply once per RESUME (not on every
+        // recomposition) by hooking into the lifecycle.
+        LaunchedEffect(Unit) {
+            repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                hasStoragePerm = withContext(Dispatchers.IO) {
+                    PermissionHelper.hasStoragePermission(this@MainActivity)
+                }
+                isBatteryOptimized = withContext(Dispatchers.IO) {
+                    !BatteryHelper.isIgnoringBatteryOptimizations(this@MainActivity)
+                }
+            }
+        }
+
+        // Initial deferred state refresh — runs once after first composition
+        // so the ProcessManager can discover the install state without
+        // blocking the UI thread during onCreate.
+        LaunchedEffect(Unit) {
+            withContext(Dispatchers.IO) { processManager.refreshState() }
+        }
+
+        var currentScreen by rememberSaveableScreen()
+        var selectedTab by rememberSaveableTab()
 
         when (currentScreen) {
             "main" -> {
-                // Force refresh when returning to main screen
-                LaunchedEffect(Unit) {
-                    processManager.refreshState()
-                }
-
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -103,10 +160,6 @@ class MainActivity : ComponentActivity() {
                         Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("Toolkit") })
                         Tab(selected = selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text("Files") })
                     }
-
-                    val prefs = this@MainActivity.getSharedPreferences("claw_prefs", Context.MODE_PRIVATE)
-                    var autoStart by remember { mutableStateOf(prefs.getBoolean("auto_start_on_boot", false)) }
-                    var isBatteryOptimized by remember { mutableStateOf(!BatteryHelper.isIgnoringBatteryOptimizations(this@MainActivity)) }
 
                     when (selectedTab) {
                         0 -> ControlPanelScreen(
@@ -129,20 +182,23 @@ class MainActivity : ComponentActivity() {
                             onReset = {
                                 lifecycleScope.launch {
                                     processManager.stop()
-                                    configManager.baseDir.deleteRecursively()
-                                    configManager.baseDir.mkdirs()
+                                    withContext(Dispatchers.IO) {
+                                        configManager.baseDir.deleteRecursively()
+                                        configManager.baseDir.mkdirs()
+                                    }
                                     processManager.refreshState()
                                     Toast.makeText(this@MainActivity, "App data reset. Restart the app.", Toast.LENGTH_LONG).show()
                                 }
                             },
                             onRequestBatteryOptimization = {
                                 BatteryHelper.requestIgnoreBatteryOptimizations(this@MainActivity)
-                                // Will re-check on resume
                             },
                             autoStartOnBoot = autoStart,
                             onAutoStartToggle = { enabled ->
                                 autoStart = enabled
-                                prefs.edit().putBoolean("auto_start_on_boot", enabled).apply()
+                                lifecycleScope.launch(Dispatchers.IO) {
+                                    prefs.edit().putBoolean("auto_start_on_boot", enabled).apply()
+                                }
                             },
                             isBatteryOptimized = isBatteryOptimized
                         )
@@ -156,7 +212,6 @@ class MainActivity : ComponentActivity() {
                             hasPermission = hasStoragePerm,
                             onRequestPermission = {
                                 PermissionHelper.requestStoragePermission(this@MainActivity)
-                                // Will recheck on resume
                             },
                             onBack = { selectedTab = 0 }
                         )
@@ -172,8 +227,7 @@ class MainActivity : ComponentActivity() {
                 onCheckUpdates = { lifecycleScope.launch { bootstrapManager.checkForUpdates() } },
                 onUpdate = { lifecycleScope.launch { bootstrapManager.updateOpenClaw() } },
                 onBack = {
-                    // Force re-check when returning from setup
-                    processManager.refreshState()
+                    lifecycleScope.launch(Dispatchers.IO) { processManager.refreshState() }
                     currentScreen = "main"
                 }
             )
@@ -183,7 +237,7 @@ class MainActivity : ComponentActivity() {
                 onSave = {
                     lifecycleScope.launch {
                         configManager.saveConfig()
-                        Toast.makeText(this@MainActivity, "Settings saved ✓", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@MainActivity, "Settings saved \u2713", Toast.LENGTH_SHORT).show()
                         currentScreen = "main"
                     }
                 }
@@ -206,7 +260,7 @@ class MainActivity : ComponentActivity() {
                 onRollback = { id ->
                     lifecycleScope.launch {
                         backupManager.rollback(id)
-                        Toast.makeText(this@MainActivity, "Rolled back ✓", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@MainActivity, "Rolled back \u2713", Toast.LENGTH_SHORT).show()
                     }
                 },
                 onDelete = { id ->
@@ -216,3 +270,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
+@Composable
+private fun rememberSaveableScreen() = remember { mutableStateOf("main") }
+
+@Composable
+private fun rememberSaveableTab() = remember { mutableIntStateOf(0) }
