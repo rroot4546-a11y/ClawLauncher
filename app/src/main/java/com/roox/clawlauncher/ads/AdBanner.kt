@@ -19,8 +19,8 @@ fun AdBanner(modifier: Modifier = Modifier) {
             .heightIn(min = 50.dp),
         factory = { ctx ->
             AdView(ctx).apply {
-                adUnitId = "ca-app-pub-2662987126681282/4456987632"
-                adSize = AdSize.BANNER
+                this.adUnitId = "ca-app-pub-2662987126681282/4456987632"
+                setAdSize(AdSize.BANNER)
                 adListener = object : com.google.android.gms.ads.AdListener() {
                     override fun onAdFailedToLoad(error: com.google.android.gms.ads.LoadAdError) {
                         Log.w("AdBanner", "Banner failed: ${error.message}")
