@@ -13,6 +13,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.lifecycleScope
+import com.roox.clawlauncher.ads.AdBanner
 import com.roox.clawlauncher.ads.AdManager
 import com.roox.clawlauncher.engine.BackupManager
 import com.roox.clawlauncher.engine.BootstrapManager
@@ -55,7 +56,16 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             ClawLauncherTheme {
-                MainApp()
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(ClawDarkBg)
+                ) {
+                    Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        MainApp()
+                    }
+                    AdBanner()
+                }
             }
         }
     }
@@ -160,6 +170,7 @@ class MainActivity : ComponentActivity() {
                             },
                             onBack = { selectedTab = 0 }
                         )
+                        }
                     }
                 }
             }

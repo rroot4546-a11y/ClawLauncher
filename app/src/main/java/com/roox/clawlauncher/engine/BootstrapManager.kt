@@ -218,8 +218,18 @@ class BootstrapManager(private val context: Context) {
 
                 // Create android-patch.js FIRST (before any Node.js calls that use NODE_OPTIONS)
                 val patchFile = File(baseDir, "android-patch.js")
+                val tmpDir = File(baseDir, "tmp").absolutePath
                 patchFile.writeText("""
 const os = require('os');
+const path = require('path');
+const fs = require('fs');
+const tmpDir = ${"\"$tmpDir\""};
+try { fs.mkdirSync(tmpDir, { recursive: true }); } catch (e) {}
+process.env.TMPDIR = tmpDir;
+process.env.TMP = tmpDir;
+process.env.TEMP = tmpDir;
+os.tmpdir = function() { return tmpDir; };
+if (typeof os.tmpDir === 'function') os.tmpDir = function() { return tmpDir; };
 const origNetworkInterfaces = os.networkInterfaces;
 os.networkInterfaces = function() {
     const ifaces = origNetworkInterfaces.call(this);
@@ -602,6 +612,9 @@ process.on('unhandledRejection', (reason, promise) => {
             "NODE_OPTIONS" to "--unhandled-rejections=warn",
             "TERM" to "xterm-256color",
             "TMPDIR" to File(baseDir, "tmp").apply { mkdirs() }.absolutePath,
+            "TMP" to File(baseDir, "tmp").apply { mkdirs() }.absolutePath,
+            "TEMP" to File(baseDir, "tmp").apply { mkdirs() }.absolutePath,
+            "OPENCLAW_TMP_DIR" to File(baseDir, "tmp").apply { mkdirs() }.absolutePath,
             "npm_config_cache" to File(baseDir, ".npm-cache").apply { mkdirs() }.absolutePath,
             "npm_config_prefix" to baseDir.absolutePath,
             "NODE_PATH" to "${baseDir.absolutePath}/lib/node_modules:${baseDir.absolutePath}/node_modules",
