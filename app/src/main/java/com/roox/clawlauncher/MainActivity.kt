@@ -170,7 +170,6 @@ class MainActivity : ComponentActivity() {
                             },
                             onBack = { selectedTab = 0 }
                         )
-                        }
                     }
                 }
             }
