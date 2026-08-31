@@ -20,6 +20,13 @@ import com.roox.clawlauncher.engine.ClawConfig
 import com.roox.clawlauncher.engine.ConfigManager
 import com.roox.clawlauncher.engine.CustomAiProvider
 import com.roox.clawlauncher.ui.theme.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
+import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -53,6 +60,11 @@ fun SettingsScreen(
     var customApi by remember { mutableStateOf("openai-completions") }
     var customModels by remember { mutableStateOf("") }
     var customFormError by remember { mutableStateOf<String?>(null) }
+
+    val scope = rememberCoroutineScope()
+    var importUrl by remember { mutableStateOf("") }
+    var importError by remember { mutableStateOf<String?>(null) }
+    var importing by remember { mutableStateOf(false) }
 
     val models by remember(localConfig.aiProvider, localConfig.customAiProviders) {
         derivedStateOf {
@@ -94,6 +106,79 @@ fun SettingsScreen(
         customApi = "openai-completions"
         customModels = ""
         customFormError = null
+    }
+
+    fun fetchProviderFromUrl() {
+        val url = importUrl.trim()
+        when {
+            url.isBlank() -> importError = "Enter a Provider config URL first."
+            !url.startsWith("http://") && !url.startsWith("https://") ->
+                importError = "URL must start with http:// or https://."
+            else -> {
+                importing = true
+                importError = null
+                scope.launch {
+                    val result = withContext(Dispatchers.IO) {
+                        try {
+                            val client = OkHttpClient.Builder()
+                                .connectTimeout(20, TimeUnit.SECONDS)
+                                .readTimeout(20, TimeUnit.SECONDS)
+                                .build()
+                            val request = Request.Builder().url(url).build()
+                            client.newCall(request).execute().use { response ->
+                                if (!response.isSuccessful) {
+                                    "HTTP ${response.code}"
+                                } else {
+                                    response.body?.string()
+                                }
+                            }
+                        } catch (e: Exception) {
+                            "Error: ${e.message ?: "network failed"}"
+                        }
+                    }
+                    importing = false
+                    if (result != null && result.startsWith("HTTP ") || result != null && result.startsWith("Error:")) {
+                        importError = result
+                        return@launch
+                    }
+                    if (result == null) {
+                        importError = "Empty response from URL."
+                        return@launch
+                    }
+                    try {
+                        val json = JSONObject(result)
+                        val fetchedId = json.optString("id").trim()
+                        val fetchedName = json.optString("name").trim()
+                        val fetchedBaseUrl = json.optString("baseUrl").trim()
+                        val fetchedApi = json.optString("api", "openai-completions").trim()
+                        val fetchedApiKey = json.optString("apiKey").trim()
+                        val fetchedModels = json.optJSONArray("models")?.let { arr ->
+                            (0 until arr.length()).map { arr.getString(it).trim() }.filter { it.isNotBlank() }
+                        }.orEmpty()
+
+                        when {
+                            fetchedId.isBlank() -> importError = "JSON is missing a provider 'id'."
+                            fetchedId in builtInProviders -> importError = "Provider ID is reserved; choose a different one in the JSON."
+                            fetchedBaseUrl.isBlank() -> importError = "JSON is missing 'baseUrl'."
+                            fetchedModels.isEmpty() -> importError = "JSON must include at least one model in 'models'."
+                            else -> {
+                                editingCustomId = null
+                                customId = fetchedId
+                                customName = fetchedName
+                                customBaseUrl = fetchedBaseUrl
+                                customApiKey = fetchedApiKey
+                                customApi = if (fetchedApi.isBlank()) "openai-completions" else fetchedApi
+                                customModels = fetchedModels.joinToString(", ")
+                                customFormError = null
+                                importError = "Provider loaded from URL — review then press Add provider."
+                            }
+                        }
+                    } catch (e: Exception) {
+                        importError = "Invalid JSON from URL: ${e.message ?: "parse error"}"
+                    }
+                }
+            }
+        }
     }
 
     fun saveCustomProvider() {
@@ -334,6 +419,41 @@ fun SettingsScreen(
             }
 
             Spacer(modifier = Modifier.height(12.dp))
+
+            Text("OR add a provider automatically from a config URL (JSON, fetched like curl):", fontSize = 12.sp, color = ClawTextSecondary)
+            Spacer(modifier = Modifier.height(6.dp))
+            OutlinedTextField(
+                value = importUrl,
+                onValueChange = { importUrl = it },
+                label = { Text("Provider config URL", color = ClawTextSecondary) },
+                placeholder = { Text("https://example.com/provider.json", color = ClawTextSecondary.copy(alpha = 0.3f)) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                colors = fieldColors
+            )
+            if (importError != null) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(importError!!, color = if (importError!!.contains("loaded from URL")) ClawGreen else ClawRed, fontSize = 12.sp)
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Button(
+                onClick = { fetchProviderFromUrl() },
+                enabled = !importing,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = ClawBlue)
+            ) {
+                Icon(if (importing) Icons.Default.Refresh else Icons.Default.CloudDownload, contentDescription = null)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(if (importing) "Fetching..." else "Fetch & load provider")
+            }
+            Text(
+                "Expected JSON: { \"id\", \"name\", \"baseUrl\", \"api\", \"models\": [...] }",
+                fontSize = 11.sp,
+                color = ClawTextSecondary.copy(alpha = 0.5f)
+            )
+            Spacer(modifier = Modifier.height(14.dp))
 
             OutlinedTextField(
                 value = customId,
