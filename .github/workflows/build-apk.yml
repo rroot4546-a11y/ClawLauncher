@@ -27,7 +27,7 @@ jobs:
         run: |
           set -e
           MIRROR="https://packages-cf.termux.dev/apt/termux-main"
-          PKGS="nodejs npm libc++ openssl zlib c-ares libicu libsqlite"
+          PKGS="nodejs npm libc++ openssl zlib c-ares libicu libsqlite libffi"
           
           mkdir -p work && cd work
           curl -sL "$MIRROR/dists/stable/main/binary-aarch64/Packages.gz" | gunzip > Packages
@@ -91,6 +91,7 @@ jobs:
           copy_lib "libicuuc.so"
           copy_lib "libicudata.so"
           copy_lib "libc++_shared.so"
+          copy_lib "libffi.so"
           
           # === STEP 3: The KEY fix — patchelf SONAME + NEEDED on ALL binaries ===
           # Problem: patchelf --replace-needed changes DT_NEEDED but the library's
@@ -98,7 +99,7 @@ jobs:
           # match verneed entries. We must set-soname on each lib too.
           
           # All versioned → unversioned renames
-          RENAMES="libz.so.1:libz.so libcrypto.so.3:libcrypto.so libssl.so.3:libssl.so libicui18n.so.78:libicui18n.so libicuuc.so.78:libicuuc.so libicudata.so.78:libicudata.so"
+          RENAMES="libz.so.1:libz.so libcrypto.so.3:libcrypto.so libssl.so.3:libssl.so libicui18n.so.78:libicui18n.so libicuuc.so.78:libicuuc.so libicudata.so.78:libicudata.so libffi.so.8:libffi.so"
           
           echo ""
           echo "=== Patching ALL binaries ==="
