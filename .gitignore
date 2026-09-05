@@ -10,3 +10,8 @@
 *.aab
 license-server/node_modules/
 license-server/serviceAccountKey.json
+
+# Termux-bundled Node.js runtime (downloaded at build time, not source)
+/app/src/main/jniLibs/
+/app/src/main/assets/npm.zip
+/work/
