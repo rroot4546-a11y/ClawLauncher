@@ -1,5 +1,7 @@
 package com.roox.clawlauncher.ui.screens
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -10,14 +12,17 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.roox.clawlauncher.auth.GoogleAuthManager
 import com.roox.clawlauncher.engine.ClawConfig
 import com.roox.clawlauncher.engine.ConfigManager
+import com.roox.clawlauncher.engine.CurlProviderParser
 import com.roox.clawlauncher.engine.CustomAiProvider
 import com.roox.clawlauncher.ui.theme.*
 import kotlinx.coroutines.Dispatchers
@@ -32,6 +37,7 @@ import java.util.concurrent.TimeUnit
 @Composable
 fun SettingsScreen(
     configManager: ConfigManager,
+    googleAuth: GoogleAuthManager,
     onBack: () -> Unit,
     onSave: () -> Unit
 ) {
@@ -48,7 +54,7 @@ fun SettingsScreen(
         mutableStateOf(config.telegramAllowedUsers.joinToString(", "))
     }
 
-    val builtInProviders = remember { listOf("openrouter", "google", "openai", "anthropic", "gemini-cli") }
+    val builtInProviders = remember { listOf("openrouter", "google", "openai", "anthropic", ConfigManager.GOOGLE_CLI_PROVIDER) }
     val providers = builtInProviders + localConfig.customAiProviders.map { it.id }
     val popularPresets = remember { configManager.getPopularProviderPresets() }
 
@@ -65,6 +71,104 @@ fun SettingsScreen(
     var importUrl by remember { mutableStateOf("") }
     var importError by remember { mutableStateOf<String?>(null) }
     var importing by remember { mutableStateOf(false) }
+
+    // ── Paste-curl → automatic provider ────────────────────────────────────
+    var curlInput by remember { mutableStateOf("") }
+    var curlFeedback by remember { mutableStateOf<String?>(null) }
+    var curlFeedbackOk by remember { mutableStateOf(false) }
+
+    /** Parse pasted curl and either route to a built-in provider or auto-add a custom one. */
+    fun applyCurlCommand() {
+        val r = CurlProviderParser.parse(curlInput)
+        if (!r.ok) {
+            curlFeedback = "❌ ${r.error}"
+            curlFeedbackOk = false
+            return
+        }
+        val host = Regex("https?://([^/:?]+)").find(r.baseUrl)?.groupValues?.get(1)?.lowercase() ?: ""
+        val warn = if (r.warnings.isNotEmpty()) " (" + r.warnings.first() + ")" else ""
+        when {
+            // Well-known official endpoints → select the matching built-in provider
+            "api.openai.com" in host -> {
+                localConfig = localConfig.copy(
+                    aiProvider = "openai",
+                    aiApiKey = r.apiKey.ifBlank { localConfig.aiApiKey },
+                    aiModel = r.model.ifBlank { "gpt-4o" }
+                )
+                configManager.updateConfig(localConfig)
+                curlFeedback = "✓ OpenAI detected — built-in provider selected with ${localConfig.aiModel}$warn"
+                curlFeedbackOk = true
+            }
+            "api.anthropic.com" in host -> {
+                localConfig = localConfig.copy(
+                    aiProvider = "anthropic",
+                    aiApiKey = r.apiKey.ifBlank { localConfig.aiApiKey },
+                    aiModel = r.model.ifBlank { "claude-sonnet-4" }
+                )
+                configManager.updateConfig(localConfig)
+                curlFeedback = "✓ Anthropic detected — built-in provider selected with ${localConfig.aiModel}$warn"
+                curlFeedbackOk = true
+            }
+            "generativelanguage.googleapis.com" in host -> {
+                localConfig = localConfig.copy(
+                    aiProvider = "google",
+                    aiApiKey = r.apiKey.ifBlank { localConfig.aiApiKey },
+                    aiModel = r.model.ifBlank { "gemini-3-flash-preview" }
+                )
+                configManager.updateConfig(localConfig)
+                curlFeedback = "✓ Google AI Studio detected — built-in provider selected with ${localConfig.aiModel}$warn"
+                curlFeedbackOk = true
+            }
+            "openrouter.ai" in host -> {
+                localConfig = localConfig.copy(
+                    aiProvider = "openrouter",
+                    aiApiKey = r.apiKey.ifBlank { localConfig.aiApiKey },
+                    aiModel = r.model.ifBlank { "anthropic/claude-sonnet-4" }
+                )
+                configManager.updateConfig(localConfig)
+                curlFeedback = "✓ OpenRouter detected — built-in provider selected with ${localConfig.aiModel}$warn"
+                curlFeedbackOk = true
+            }
+            r.model.isBlank() -> {
+                // Provider detected but model unknown — pre-fill the manual form
+                customId = r.suggestedId
+                customName = r.suggestedName
+                customBaseUrl = r.baseUrl
+                customApiKey = r.apiKey
+                customApi = r.api
+                customModels = r.extraModels.joinToString(", ")
+                editingCustomId = null
+                customFormError = null
+                curlFeedback = "⚠️ ${r.warnings.joinToString(" ").ifBlank { "Model not detected." }} Form pre-filled — add a model ID and press Add provider."
+                curlFeedbackOk = false
+            }
+            else -> {
+                val models = (listOf(r.model) + r.extraModels)
+                    .filter { it.isNotBlank() }.distinct()
+                var id = r.suggestedId
+                if (id in builtInProviders) id = "$id-api"
+                val provider = CustomAiProvider(
+                    id = id,
+                    name = r.suggestedName,
+                    baseUrl = r.baseUrl,
+                    apiKey = r.apiKey,
+                    api = r.api,
+                    models = models
+                )
+                val updated = localConfig.customAiProviders
+                    .filterNot { it.id == provider.id } + provider
+                localConfig = localConfig.copy(
+                    customAiProviders = updated,
+                    aiProvider = provider.id,
+                    aiApiKey = provider.apiKey,
+                    aiModel = models.first()
+                )
+                configManager.updateConfig(localConfig)
+                curlFeedback = "✓ \"${provider.name}\" added automatically — ${models.first()} is now the active model. Press Save.$warn"
+                curlFeedbackOk = true
+            }
+        }
+    }
 
     val models by remember(localConfig.aiProvider, localConfig.customAiProviders) {
         derivedStateOf {
@@ -291,7 +395,12 @@ fun SettingsScreen(
                                     ?: ""
                                 localConfig = localConfig.copy(
                                     aiProvider = provider,
-                                    aiApiKey = custom?.apiKey ?: localConfig.aiApiKey,
+                                    aiApiKey = when {
+                                        custom != null -> custom.apiKey
+                                        // Google account sign-in needs NO API key — clear stale keys
+                                        provider == ConfigManager.GOOGLE_CLI_PROVIDER -> ""
+                                        else -> localConfig.aiApiKey
+                                    },
                                     aiModel = firstModel
                                 )
                                 providerExpanded = false
@@ -304,17 +413,22 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(12.dp))
 
             if (!needsApiKey) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(ClawGreen.copy(alpha = 0.1f), RoundedCornerShape(10.dp))
-                        .padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Default.AccountCircle, contentDescription = null, tint = ClawGreen, modifier = Modifier.size(20.dp))
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text("Sign in with your Google account. No API key needed.", fontSize = 13.sp, color = ClawGreen)
-                }
+                GoogleAccountCard(
+                    googleAuth = googleAuth,
+                    onSignedIn = {
+                        // Make sure provider + a free-tier model are selected after login
+                        if (localConfig.aiModel.isBlank() ||
+                            configManager.getAvailableModels()[ConfigManager.GOOGLE_CLI_PROVIDER]
+                                ?.none { it.first == localConfig.aiModel } == true) {
+                            localConfig = localConfig.copy(
+                                aiProvider = ConfigManager.GOOGLE_CLI_PROVIDER,
+                                aiModel = "gemini-3-flash-preview",
+                                aiApiKey = ""
+                            )
+                            configManager.updateConfig(localConfig)
+                        }
+                    }
+                )
                 Spacer(modifier = Modifier.height(12.dp))
             }
 
@@ -420,7 +534,71 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            Text("OR add a provider automatically from a config URL (JSON, fetched like curl):", fontSize = 12.sp, color = ClawTextSecondary)
+            // ── Paste-curl auto provider ──────────────────────────────────
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(ClawBlue.copy(alpha = 0.08f), RoundedCornerShape(14.dp))
+                    .padding(14.dp)
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = ClawBlue, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Add provider automatically (paste curl)", color = ClawTextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "Copy an example request from your AI service docs (curl) and paste it — base URL, API key, and model are detected automatically.",
+                        fontSize = 11.sp, color = ClawTextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = curlInput,
+                        onValueChange = { curlInput = it; curlFeedback = null },
+                        label = { Text("curl command", color = ClawTextSecondary) },
+                        placeholder = {
+                            Text(
+                                "curl https://api.groq.com/openai/v1/chat/completions \\\n  -H \"Authorization: Bearer gsk_...\" \\\n  -d '{\"model\":\"llama-3.3-70b-versatile\",\"messages\":[...]}'",
+                                color = ClawTextSecondary.copy(alpha = 0.3f),
+                                fontSize = 11.sp
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 3,
+                        maxLines = 6,
+                        colors = fieldColors
+                    )
+                    if (curlFeedback != null) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            curlFeedback!!,
+                            color = if (curlFeedbackOk) ClawGreen else ClawYellow,
+                            fontSize = 12.sp
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = { applyCurlCommand() },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = ClawBlue)
+                    ) {
+                        Icon(Icons.Default.Bolt, contentDescription = null)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Analyze & add automatically")
+                    }
+                    Text(
+                        "OpenAI-compatible / Anthropic / Google detect automatically. Official endpoints map to built-in providers.",
+                        fontSize = 10.5.sp,
+                        color = ClawTextSecondary.copy(alpha = 0.5f)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text("OR add a provider from a config URL (JSON):", fontSize = 12.sp, color = ClawTextSecondary)
             Spacer(modifier = Modifier.height(6.dp))
             OutlinedTextField(
                 value = importUrl,
@@ -697,6 +875,149 @@ fun SettingsScreen(
                 )
             }
             Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+}
+
+@Composable
+fun GoogleAccountCard(
+    googleAuth: GoogleAuthManager,
+    onSignedIn: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val session by googleAuth.session.collectAsState()
+    var pastedCode by remember { mutableStateOf("") }
+    var showCodeField by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(ClawCardBg, RoundedCornerShape(14.dp))
+            .padding(14.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.AccountCircle, contentDescription = null, tint = ClawBlue, modifier = Modifier.size(22.dp))
+            Spacer(modifier = Modifier.width(10.dp))
+            Column {
+                Text("Google Account Sign-in", color = ClawTextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text("Use Gemini without an API key (same sign-in as Gemini CLI)", fontSize = 11.sp, color = ClawTextSecondary)
+            }
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+
+        if (session.isSignedIn) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = ClawGreen, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Column {
+                    Text(session.email.ifBlank { "Signed in" }, color = ClawGreen, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    val minsLeft = session.millisLeft / 60000
+                    Text(
+                        if (minsLeft > 0) "Token valid for ~${minsLeft} min (auto-refreshes)"
+                        else "Token expired — press Refresh",
+                        fontSize = 11.sp, color = ClawTextSecondary
+                    )
+                }
+            }
+            session.quotaSummary?.let {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(it, fontSize = 12.sp, color = ClawTextSecondary)
+            }
+            session.lastError?.let {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(it, fontSize = 12.sp, color = ClawRed)
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { scope.launch { googleAuth.refreshIfNeeded(force = true) } },
+                    enabled = !session.isRefreshing,
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(if (session.isRefreshing) "Refreshing..." else "Refresh", fontSize = 12.sp)
+                }
+                OutlinedButton(
+                    onClick = { scope.launch { googleAuth.checkQuota() } },
+                    enabled = !session.checkingQuota,
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(Icons.Default.Speed, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(if (session.checkingQuota) "Checking..." else "Test", fontSize = 12.sp)
+                }
+                OutlinedButton(
+                    onClick = { scope.launch { googleAuth.signOut() } },
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = ClawRed)
+                ) {
+                    Icon(Icons.Default.Logout, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Sign out", fontSize = 12.sp)
+                }
+            }
+        } else {
+            Text(
+                "1) Press the button — the browser opens Google's sign-in page.\n" +
+                    "2) Approve access (code shown on a Google page).\n" +
+                    "3) Paste that code below.",
+                fontSize = 11.sp, color = ClawTextSecondary, lineHeight = 16.sp
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Button(
+                onClick = {
+                    try {
+                        val url = googleAuth.startSignIn()
+                        showCodeField = true
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                    } catch (_: Exception) {
+                        showCodeField = true
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = ClawBlue)
+            ) {
+                Icon(Icons.Default.Login, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Sign in with Google")
+            }
+            if (showCodeField) {
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = pastedCode,
+                    onValueChange = { pastedCode = it },
+                    label = { Text("Paste the authorization code", color = ClawTextSecondary) },
+                    placeholder = { Text("4/1Af... code from Google page", color = ClawTextSecondary.copy(alpha = 0.3f)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        scope.launch {
+                            val ok = googleAuth.completeSignIn(pastedCode)
+                            if (ok) {
+                                pastedCode = ""
+                                showCodeField = false
+                                onSignedIn()
+                            }
+                        }
+                    },
+                    enabled = pastedCode.isNotBlank() && !session.isRefreshing,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = ClawGreen)
+                ) {
+                    Text(if (session.isRefreshing) "Signing in..." else "Complete sign-in")
+                }
+            }
+            session.lastError?.let {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(it, fontSize = 12.sp, color = ClawRed)
+            }
         }
     }
 }

@@ -53,5 +53,26 @@ Open **Settings → Custom AI Providers** to add an OpenAI-compatible service. Y
 
 The provider form supports local services such as Ollama and LM Studio as well as hosted services such as Groq, DeepSeek, Together AI, Fireworks AI, Mistral, xAI, and Perplexity. For local services, the API key can be left empty.
 
+### ⚡ Automatic provider from a pasted `curl` command
+
+Copy a sample request from your AI service's docs (the typical `curl https://... -H "Authorization: Bearer ..." -d '{"model": ...}'`) and paste it into **Settings → Custom AI Providers → Add provider automatically**. ClawLauncher detects:
+
+- **Base URL** (path suffixes like `/chat/completions` or `/messages` are trimmed)
+- **API key** (`Authorization: Bearer`, `x-api-key`, `x-goog-api-key`, `?key=` in URL)
+- **API format** (OpenAI-completions, Anthropic-messages, Google Generative AI)
+- **Model ID** (from the request body) and instantly makes it the active model
+
+Official endpoints (`api.openai.com`, `api.anthropic.com`, `generativelanguage.googleapis.com`, `openrouter.ai`) are routed to the matching built-in provider automatically.
+
+## Sign in with Google — Gemini without an API key
+
+Select **AI Provider → Gemini (Google Account — no API key)** and press **Sign in with Google** in Settings. ClawLauncher performs the same OAuth sign-in flow as Google's Gemini CLI (public "installed app" OAuth client + PKCE, user-code flow):
+
+1. The browser opens the official Google sign-in page.
+2. Approve — Google shows a short authorization code.
+3. Paste the code into the app. Done.
+
+Tokens are stored both as Gemini-CLI ambient credentials (`~/.gemini/oauth_creds.json`) and as an OpenClaw OAuth auth profile (`google-gemini-cli:default`) inside OpenClaw's state store. The access token is refreshed automatically before every server start and every 20 minutes while the server runs — no manual maintenance needed. A **Test** button in Settings verifies the token against Google's quota endpoint.
+
 ## License
 Private — All Rights Reserved © 2026

@@ -47,9 +47,15 @@ data class ClawConfig(
     val rootEnabled: Boolean = false
 )
 
-class ConfigManager(private val context: Context) {
+class ConfigManager(
+    private val context: Context,
+    private val authStore: AuthStoreManager = AuthStoreManager(context)
+) {
     private val _config = MutableStateFlow(ClawConfig())
     val config: StateFlow<ClawConfig> = _config
+
+    /** The OpenClaw auth-profile store (SQLite) — shared with GoogleAuthManager. */
+    val authStoreManager: AuthStoreManager get() = authStore
 
     val baseDir: File get() = File(context.filesDir, "openclaw")
     val workspaceDir: File get() = File(baseDir, "workspace")
@@ -58,12 +64,24 @@ class ConfigManager(private val context: Context) {
     private val secondaryConfigFile: File get() = File(dotOpenclawDir, "openclaw.json")
     private val envFile: File get() = File(baseDir, ".env")
 
-    private val builtInProviderIds = listOf("openrouter", "google", "openai", "anthropic", "gemini-cli")
+    companion object {
+        /** Canonical OAuth/Gemini-CLI provider id in OpenClaw ("gemini-cli" is only an alias). */
+        const val GOOGLE_CLI_PROVIDER = "google-gemini-cli"
+    }
+
+    private val builtInProviderIds = listOf("openrouter", "google", "openai", "anthropic", GOOGLE_CLI_PROVIDER)
+
+    /** Map legacy/alias provider ids to canonical ones. */
+    private fun normalizeProviderId(id: String): String =
+        if (id == "gemini-cli") GOOGLE_CLI_PROVIDER else id
 
     init {
         baseDir.mkdirs()
         workspaceDir.mkdirs()
         dotOpenclawDir.mkdirs()
+        // Move any legacy auth-profiles.json into the SQLite store — leaving
+        // those files behind makes OpenClaw refuse to boot once migrated.
+        authStore.migrateLegacyFiles()
         loadConfig()
     }
 
@@ -150,11 +168,10 @@ class ConfigManager(private val context: Context) {
         customProviders: List<CustomAiProvider>
     ): Pair<String, String> {
         if (rawPrimary.isBlank()) return "openrouter" to "anthropic/claude-sonnet-4"
-        val providerIds = builtInProviderIds + customProviders.map { it.id }
-        val provider = providerIds.firstOrNull { rawPrimary.startsWith("$it/") || rawPrimary == it }
-            ?: "openrouter"
-        val model = if (rawPrimary == provider) "" else rawPrimary.removePrefix("$provider/")
-        return provider to model
+        val ids = (builtInProviderIds + "gemini-cli") + customProviders.map { it.id }
+        val matched = ids.firstOrNull { rawPrimary.startsWith("$it/") || rawPrimary == it } ?: "openrouter"
+        val model = if (rawPrimary == matched) "" else rawPrimary.removePrefix("$matched/")
+        return normalizeProviderId(matched) to model
     }
 
     private fun parseCustomProviders(providersJson: JSONObject?): List<CustomAiProvider> {
@@ -197,7 +214,7 @@ class ConfigManager(private val context: Context) {
     fun getCustomProvider(provider: String): CustomAiProvider? =
         _config.value.customAiProviders.firstOrNull { it.id == provider }
 
-    fun providerRequiresApiKey(provider: String): Boolean = provider != "gemini-cli"
+    fun providerRequiresApiKey(provider: String): Boolean = normalizeProviderId(provider) != GOOGLE_CLI_PROVIDER
 
     suspend fun saveConfig() {
         withContext(Dispatchers.IO) {
@@ -237,7 +254,8 @@ class ConfigManager(private val context: Context) {
                 json.put("models", JSONObject().put("mode", "merge").put("providers", providerObjects))
             }
 
-            if (c.aiApiKey.isNotBlank() && !isCustomProvider(c.aiProvider)) {
+            if (c.aiApiKey.isNotBlank() && !isCustomProvider(c.aiProvider)
+                && normalizeProviderId(c.aiProvider) != GOOGLE_CLI_PROVIDER) {
                 val authObj = JSONObject()
                 val profilesObj = JSONObject()
                 val profileKey = "${c.aiProvider}:default"
@@ -277,7 +295,7 @@ class ConfigManager(private val context: Context) {
                 "google" -> if (c.aiApiKey.isNotBlank()) envLines.add("GEMINI_API_KEY=${c.aiApiKey}")
                 "openai" -> if (c.aiApiKey.isNotBlank()) envLines.add("OPENAI_API_KEY=${c.aiApiKey}")
                 "anthropic" -> if (c.aiApiKey.isNotBlank()) envLines.add("ANTHROPIC_API_KEY=${c.aiApiKey}")
-                "gemini-cli" -> Unit
+                GOOGLE_CLI_PROVIDER, "gemini-cli" -> Unit
             }
             if (envLines.isNotEmpty()) {
                 val envContent = envLines.joinToString("\n") + "\n"
@@ -285,25 +303,21 @@ class ConfigManager(private val context: Context) {
                 File(dotOpenclawDir, ".env").writeText(envContent)
             }
 
-            if (c.aiApiKey.isNotBlank() && !isCustomProvider(c.aiProvider)) {
-                val provider = c.aiProvider
-                val authProfiles = JSONObject().put("version", 1)
+            // Write API-key profiles DIRECTLY to the OpenClaw SQLite auth store.
+            // (Legacy auth-profiles.json is a one-way migration source: writing it
+            // after the store exists makes OpenClaw refuse to boot with
+            // "requires legacy credential migration".)
+            if (c.aiApiKey.isNotBlank() && !isCustomProvider(c.aiProvider)
+                && normalizeProviderId(c.aiProvider) != GOOGLE_CLI_PROVIDER) {
+                val provider = normalizeProviderId(c.aiProvider)
                 val profile = JSONObject()
-                    .put("key", c.aiApiKey)
-                    .put("provider", provider)
                     .put("type", "api_key")
-                authProfiles.put("profiles", JSONObject().put("$provider:default", profile))
-                val authJson = authProfiles.toString(2)
-                val paths = listOf(
-                    File(dotOpenclawDir, "agents/main/agent"),
-                    File(dotOpenclawDir, ".openclaw/agents/main/agent"),
-                    File(baseDir, "agents/main/agent")
-                )
-                paths.forEach { path ->
-                    path.mkdirs()
-                    File(path, "auth-profiles.json").writeText(authJson)
-                }
+                    .put("provider", provider)
+                    .put("key", c.aiApiKey)
+                authStore.upsertProfile("$provider:default", profile)
             }
+            // Safety: sweep any legacy files a previous version might have left.
+            authStore.migrateLegacyFiles()
 
             ensureWorkspaceFiles()
         }
@@ -339,10 +353,9 @@ class ConfigManager(private val context: Context) {
             ),
             "google" to listOf(
                 "gemini-3.1-pro-preview" to "Gemini 3.1 Pro Preview",
-                "gemini-3.5-flash" to "Gemini 3.5 Flash",
+                "gemini-3-flash-preview" to "Gemini 3 Flash Preview",
                 "gemini-2.5-pro" to "Gemini 2.5 Pro",
-                "gemini-2.5-flash" to "Gemini 2.5 Flash",
-                "gemini-2.0-flash" to "Gemini 2.0 Flash"
+                "gemini-2.5-flash" to "Gemini 2.5 Flash"
             ),
             "openai" to listOf(
                 "gpt-5.6-sol" to "GPT-5.6 Sol",
@@ -356,9 +369,12 @@ class ConfigManager(private val context: Context) {
                 "claude-sonnet-4" to "Claude Sonnet 4",
                 "claude-haiku-4" to "Claude Haiku 4"
             ),
-            "gemini-cli" to listOf(
-                "gemini-2.5-pro" to "Gemini 2.5 Pro",
-                "gemini-2.0-flash" to "Gemini 2.0 Flash"
+            // Google account sign-in (no API key — same OAuth Gemini CLI uses)
+            GOOGLE_CLI_PROVIDER to listOf(
+                "gemini-3-flash-preview" to "Gemini 3 Flash • Free tier",
+                "gemini-3.1-pro-preview" to "Gemini 3.1 Pro Preview",
+                "gemini-2.5-pro" to "Gemini 2.5 Pro • Free tier",
+                "gemini-2.5-flash" to "Gemini 2.5 Flash • Free tier"
             )
         )
     }
@@ -406,21 +422,21 @@ class ConfigManager(private val context: Context) {
         )
     )
 
-    fun getProviderName(id: String): String = when (id) {
+    fun getProviderName(id: String): String = when (normalizeProviderId(id)) {
         "openrouter" -> "OpenRouter (Multi-provider)"
         "google" -> "Google Gemini (API Key)"
         "openai" -> "OpenAI"
         "anthropic" -> "Anthropic"
-        "gemini-cli" -> "Gemini (Google Account)"
+        GOOGLE_CLI_PROVIDER -> "Gemini (Google Account — no API key)"
         else -> _config.value.customAiProviders.firstOrNull { it.id == id }?.name ?: id
     }
 
-    fun getProviderKeyHint(id: String): String = when (id) {
+    fun getProviderKeyHint(id: String): String = when (normalizeProviderId(id)) {
         "openrouter" -> "sk-or-v1-..."
         "google" -> "AIzaSy..."
         "openai" -> "sk-..."
         "anthropic" -> "sk-ant-..."
-        "gemini-cli" -> ""
+        GOOGLE_CLI_PROVIDER -> ""
         else -> "API key (optional for local providers)"
     }
 }
