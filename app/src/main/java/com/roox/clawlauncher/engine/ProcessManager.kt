@@ -282,7 +282,7 @@ if (typeof os.tmpDir === 'function') os.tmpDir = function() { return tmpDir; };
         const ent = entries[i];
         const full = path.join(dir, ent.name);
         if (ent.isDirectory()) {
-          if (ent.name === 'node_modules') continue;
+          if (ent.name === 'node_modules' && full !== path.join(pkgRoot, 'node_modules', 'openclaw')) continue;
           scan(full);
         } else if (/\.(mjs|cjs|js)$/.test(ent.name)) {
           let src;
@@ -321,6 +321,26 @@ if (typeof os.tmpDir === 'function') os.tmpDir = function() { return tmpDir; };
   }
 })();
 // ── END /tmp FIX ───────────────────────────────────────────────────────
+// ── FS.LINKSYNC MONKEY-PATCH FOR ANDROID ──────────────────────────────
+// OpenClaw's publishBootstrapFile() in dist/workspace-ConDEamr.js writes
+// bootstrap files (AGENTS.md, SOUL.md, IDENTITY.md, USER.md) by creating
+// a temp file then fs.linkSync()ing it into the workspace. Android's
+// filesystem often rejects hard links with EACCES. We patch fs.linkSync
+// to fall back to fs.copyFileSync when EACCES or EPERM occurs — this lets
+// publishBootstrapFile() succeed without modifying the dist source.
+const origLinkSync = fs.linkSync;
+fs.linkSync = function(target, linkPath) {
+    try {
+        return origLinkSync(target, linkPath);
+    } catch (e) {
+        if (e && (e.code === "EACCES" || e.code === "EPERM")) {
+            fs.copyFileSync(target, linkPath);
+            return;
+        }
+        throw e;
+    }
+};
+// ── END LINKSYNC MONKEY-PATCH ──────────────────────────────────────────
 const origNetworkInterfaces = os.networkInterfaces;
 os.networkInterfaces = function() {
     const ifaces = origNetworkInterfaces.call(this);
