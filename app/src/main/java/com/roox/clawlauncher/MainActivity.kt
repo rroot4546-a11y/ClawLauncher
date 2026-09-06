@@ -196,6 +196,7 @@ class MainActivity : ComponentActivity() {
             "settings" -> SettingsScreen(
                 configManager = configManager,
                 googleAuth = googleAuth,
+                processManager = processManager,
                 onBack = { currentScreen = "main" },
                 onSave = {
                     lifecycleScope.launch {

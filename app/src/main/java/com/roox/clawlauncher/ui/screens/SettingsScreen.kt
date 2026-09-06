@@ -24,6 +24,8 @@ import com.roox.clawlauncher.engine.ClawConfig
 import com.roox.clawlauncher.engine.ConfigManager
 import com.roox.clawlauncher.engine.CurlProviderParser
 import com.roox.clawlauncher.engine.CustomAiProvider
+import com.roox.clawlauncher.engine.ProcessManager
+import com.roox.clawlauncher.engine.ServerState
 import com.roox.clawlauncher.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -38,6 +40,7 @@ import java.util.concurrent.TimeUnit
 fun SettingsScreen(
     configManager: ConfigManager,
     googleAuth: GoogleAuthManager,
+    processManager: ProcessManager? = null,
     onBack: () -> Unit,
     onSave: () -> Unit
 ) {
@@ -416,16 +419,26 @@ fun SettingsScreen(
                 GoogleAccountCard(
                     googleAuth = googleAuth,
                     onSignedIn = {
-                        // Make sure provider + a free-tier model are selected after login
-                        if (localConfig.aiModel.isBlank() ||
-                            configManager.getAvailableModels()[ConfigManager.GOOGLE_CLI_PROVIDER]
-                                ?.none { it.first == localConfig.aiModel } == true) {
-                            localConfig = localConfig.copy(
-                                aiProvider = ConfigManager.GOOGLE_CLI_PROVIDER,
-                                aiModel = "gemini-3-flash-preview",
-                                aiApiKey = ""
-                            )
-                            configManager.updateConfig(localConfig)
+                        // Sign-in means "use Gemini NOW": force-select the provider
+                        // + a free-tier model (unconditionally — not only when the
+                        // previous model was blank/foreign), clear any stale API key,
+                        // persist immediately, and hot-restart the running gateway
+                        // so OpenClaw switches to the Google login with zero taps.
+                        val googleModels = configManager.getAvailableModels()[ConfigManager.GOOGLE_CLI_PROVIDER].orEmpty()
+                        val keepModel = googleModels.any { it.first == localConfig.aiModel }
+                        localConfig = localConfig.copy(
+                            aiProvider = ConfigManager.GOOGLE_CLI_PROVIDER,
+                            aiModel = if (keepModel) localConfig.aiModel else "gemini-3-flash-preview",
+                            aiApiKey = ""
+                        )
+                        configManager.updateConfig(localConfig)
+                        processManager?.let { pm ->
+                            scope.launch {
+                                configManager.saveConfig()
+                                if (pm.status.value.state == ServerState.RUNNING) {
+                                    pm.restart()
+                                }
+                            }
                         }
                     }
                 )

@@ -228,17 +228,99 @@ class ProcessManager(
                 // Preload android-patch.js to filter broken network interfaces
                 val patchFile = File(baseDir, "android-patch.js")
                 val tmpDir = File(baseDir, "tmp").apply { mkdirs() }.absolutePath
+                val locksDir = File(baseDir, "locks").apply { mkdirs() }.absolutePath
                 patchFile.writeText("""
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
 const tmpDir = ${"\"$tmpDir\""};
+const locksDir = ${"\"$locksDir\""};
 try { fs.mkdirSync(tmpDir, { recursive: true }); } catch (e) {}
+try { fs.mkdirSync(locksDir, { recursive: true }); } catch (e) {}
 process.env.TMPDIR = tmpDir;
 process.env.TMP = tmpDir;
 process.env.TEMP = tmpDir;
+process.env.OPENCLAW_STATE_LOCKS_DIR = locksDir;
 os.tmpdir = function() { return tmpDir; };
 if (typeof os.tmpDir === 'function') os.tmpDir = function() { return tmpDir; };
+// ── HARD-CODED /tmp FIX ────────────────────────────────────────────────
+// OpenClaw's resolveStateLifecycleRuntimeDirectory() returns the literal
+// '/tmp' (hard-coded; ignores TMPDIR/os.tmpdir). /tmp can't be created by
+// an Android app, so the gateway dies with:
+//   EACCES: permission denied, mkdir '/tmp/openclaw-state-locks-<uid>'
+// The lock sqlite files are then opened natively (node:sqlite), which a
+// JS-level fs monkey-patch cannot redirect. The only reliable fix is to
+// rewrite the installed source in place (idempotent, version-keyed) so the
+// function honors OPENCLAW_STATE_LOCKS_DIR. Two source forms exist inside
+// the dist bundles — minified (backticks) and pretty-printed (quotes) —
+// so we patch with a single quote-style-agnostic regex, e.g.:
+//   process.platform===`win32`?...:`/tmp`
+//   process.platform === "win32" ? ... : "/tmp";
+(function patchOpenClawTmpLocks() {
+  try {
+    // Under `node --require patch.js <openclawMain> gateway run ...`,
+    // argv[1] is the main script path (argv[2] would be the CLI subcommand).
+    const mainFile = process.argv[1] || '';
+    const pkgRoot = path.dirname(mainFile); // .../node_modules/openclaw
+    let version = 'unknown';
+    try { version = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8')).version || 'unknown'; } catch (e) {}
+    // v2 scheme: covers both minified and pretty-printed bundle forms, and
+    // re-patches installs that already received the earlier (broken) v1 patch.
+    const flagFile = path.join(locksDir, '.tmp-locks-patched-v2-' + version);
+    if (fs.existsSync(flagFile)) return; // already patched for this openclaw version
+
+    const RET_RX = /process\.platform\s*={2,3}\s*(["'`])win32\1\s*\?\s*path\.join\(os\.homedir\(\),\s*(["'`])AppData\2\s*,\s*(["'`])Local\3\s*,\s*(["'`])OpenClaw\4\s*,\s*(["'`])locks\5\s*\)\s*:\s*["'`]\/tmp["'`]/g;
+
+    let patched = 0, seen = 0;
+    const visited = new Set();
+    const scan = function(dir) {
+      if (visited.has(dir)) return;
+      visited.add(dir);
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+      for (let i = 0; i < entries.length; i++) {
+        const ent = entries[i];
+        const full = path.join(dir, ent.name);
+        if (ent.isDirectory()) {
+          if (ent.name === 'node_modules') continue;
+          scan(full);
+        } else if (/\.(mjs|cjs|js)$/.test(ent.name)) {
+          let src;
+          try { src = fs.readFileSync(full, 'utf8'); } catch (e) { continue; }
+          if (src.indexOf('resolveStateLifecycleRuntimeDirectory') === -1) continue;
+          seen++;
+          let next = src.replace(RET_RX, function(m) {
+            return '(process.env.OPENCLAW_STATE_LOCKS_DIR&&process.platform!=="win32")?process.env.OPENCLAW_STATE_LOCKS_DIR:(' + m + ')';
+          });
+          if (next !== src) {
+            try {
+              fs.writeFileSync(full, next);
+              patched++;
+              console.error('[claw-patch] patched /tmp state-locks in: ' + full);
+            } catch (e) {
+              console.error('[claw-patch] cannot write ' + full + ': ' + e.message);
+            }
+          }
+        }
+      }
+    };
+    scan(path.join(pkgRoot, 'dist'));
+    scan(path.join(pkgRoot, 'lib'));
+
+    if (patched > 0) {
+      try { fs.writeFileSync(flagFile, 'patched=' + patched + ' seen=' + seen + '\n'); } catch (e) {}
+    } else {
+      // No live declaration found (maybe already re-export-only bundles, or a
+      // new rewrite). Still drop a flag so we don't re-scan every boot, but
+      // keep a warning visible in the log.
+      console.error('[claw-patch] WARN: no /tmp-return declaration patched (seen files=' + seen + ', version ' + version + ')');
+      try { fs.writeFileSync(flagFile, 'patched=0 seen=' + seen + '\n'); } catch (e) {}
+    }
+  } catch (e) {
+    console.error('[claw-patch] tmp-locks patch failed: ' + e.message);
+  }
+})();
+// ── END /tmp FIX ───────────────────────────────────────────────────────
 const origNetworkInterfaces = os.networkInterfaces;
 os.networkInterfaces = function() {
     const ifaces = origNetworkInterfaces.call(this);
@@ -308,7 +390,7 @@ process.on('unhandledRejection', (reason, promise) => {
                 // Wait a bit and check if process is alive
                 var started = false
                 val version = bootstrapManager.getOpenClawVersion()
-                for (i in 1..30) { // Wait up to 15 seconds
+                for (i in 1..120) { // Wait up to 60 seconds (gateway boot can be slow on first-run migrations)
                     delay(500)
 
                     // Read available output
@@ -331,7 +413,7 @@ process.on('unhandledRejection', (reason, promise) => {
                         throw Exception("Process exited (code: $exit). Check logs.")
                     }
 
-                    if (started || i >= 10) {
+                    if (started || i >= 120) {
                         started = true
                         break
                     }
