@@ -439,6 +439,11 @@ process.on('unhandledRejection', (reason, promise) => {
                     log("✓ OpenClaw already installed: ${getOpenclawMainPath()}")
                 }
 
+                // Step 3.5: Gemini CLI (required by OpenClaw's google-gemini-cli
+                // provider — without the "gemini" binary the gateway fails with
+                // "spawn gemini ENOENT"). Non-fatal: other providers still work.
+                installGeminiCli()
+
                 // Step 4: Config + Workspace
                 _progress.value = _progress.value.copy(step = "Finalizing...", progress = 0.92f, npmLine = "")
 
@@ -520,6 +525,7 @@ process.on('unhandledRejection', (reason, promise) => {
                 if (exit != 0) throw Exception("Update failed (exit: $exit)")
                 val entry = findOpenclawEntry()
                 if (entry != null) saveOpenclawPath(entry.absolutePath)
+                installGeminiCli()
                 val installed = getOpenClawVersion()
                 _updateInfo.value = _updateInfo.value.copy(
                     installedVersion = installed,
@@ -538,6 +544,52 @@ process.on('unhandledRejection', (reason, promise) => {
                 log("❌ ${e.message}")
                 _progress.value = _progress.value.copy(isRunning = false, error = e.message)
             }
+        }
+    }
+
+    /**
+     * Install (or refresh) @google/gemini-cli so OpenClaw's "google-gemini-cli"
+     * provider can spawn the `gemini` CLI. OpenClaw runs it as a subprocess; if the
+     * binary is missing the gateway fails with `spawn gemini ENOENT`. npm with
+     * --prefix baseDir drops the binary at baseDir/bin/gemini, which is already on
+     * the gateway PATH. Never fatal — other AI providers keep working without it.
+     */
+    private fun installGeminiCli() {
+        try {
+            if (!isNpmInstalled) {
+                log("⚠ Gemini CLI skipped (npm not installed)")
+                return
+            }
+            val binDir = File(baseDir, "bin")
+            binDir.mkdirs()
+            val geminiBin = File(binDir, "gemini")
+            if (geminiBin.exists()) {
+                log("✓ Gemini CLI ready: ${geminiBin.absolutePath}")
+                return
+            }
+            log("→ Installing Gemini CLI (@google/gemini-cli) for Google sign-in...")
+            val env = buildEnv()
+            runCmdOutput(
+                env, nodeBin.absolutePath, npmCli.absolutePath,
+                "install", "@google/gemini-cli",
+                "--prefix", baseDir.absolutePath,
+                "--no-audit", "--no-fund", "--ignore-scripts", "--force"
+            )
+            // Locate the bundle. `npm install --prefix` drops the package at
+            // <prefix>/node_modules/@google/gemini-cli/bundle/gemini.js and only
+            // creates a node_modules/.bin link (whose "#!/usr/bin/env node"
+            // shebang can't resolve on Android). Create a bin wrapper pointing at
+            // the bundled node, exactly like the existing "npm" wrapper.
+            val bundle = File(baseDir, "node_modules/@google/gemini-cli/bundle/gemini.js")
+            if (!bundle.exists()) {
+                log("⚠ Gemini CLI install did not produce a bundle")
+                return
+            }
+            geminiBin.writeText("#!/system/bin/sh\nexec \"${nodeBin.absolutePath}\" \"${bundle.absolutePath}\" \"$@\"\n")
+            geminiBin.setExecutable(true, false)
+            log("✓ Gemini CLI ready: ${geminiBin.absolutePath}")
+        } catch (e: Exception) {
+            log("⚠ Gemini CLI install failed (non-fatal): ${e.message}")
         }
     }
 
