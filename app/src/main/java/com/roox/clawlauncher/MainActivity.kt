@@ -169,6 +169,7 @@ class MainActivity : ComponentActivity() {
                             onSnapshotConfig = { currentScreen = "settings" }
                         )
                         2 -> FileManagerScreen(
+                            openclawDir = configManager.baseDir,
                             hasPermission = hasStoragePerm,
                             onRequestPermission = {
                                 PermissionHelper.requestStoragePermission(this@MainActivity)
