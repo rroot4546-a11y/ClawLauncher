@@ -63,6 +63,7 @@ class ConfigManager(
     private val dotOpenclawDir: File get() = File(baseDir, ".openclaw")
     private val secondaryConfigFile: File get() = File(dotOpenclawDir, "openclaw.json")
     private val envFile: File get() = File(baseDir, ".env")
+    private val providerNamesFile: File get() = File(baseDir, "openclaw-provider-names.json")
 
     private val builtInProviderIds = listOf("openrouter", "google", "openai", "anthropic")
 
@@ -83,6 +84,18 @@ class ConfigManager(
 
         try {
             val json = JSONObject(file.readText())
+            // Gateway schema rejects a "name" key on provider entries
+            // (extraProperties not allowed). Our older versions wrote one for
+            // every custom provider, which makes the gateway exit with
+            // "Unrecognized key: name" (code 78). Back the friendly name up to
+            // an app-private file and rewrite the config without it, so startup
+            // recovers without needing `openclaw doctor --fix`.
+            if (sanitizeProviderNameKeys(json)) {
+                val text = json.toString(2)
+                configFile.writeText(text)
+                dotOpenclawDir.mkdirs()
+                secondaryConfigFile.writeText(text)
+            }
 
             val telegram = json.optJSONObject("channels")?.optJSONObject("telegram")
             val botToken = telegram?.optString("botToken", "")
@@ -184,7 +197,7 @@ class ConfigManager(
             } ?: emptyList()
             result += CustomAiProvider(
                 id = id,
-                name = provider.optString("name", id),
+                name = loadProviderNames()[id] ?: provider.optString("name", id),
                 baseUrl = provider.optString("baseUrl", ""),
                 apiKey = provider.optString("apiKey", ""),
                 api = provider.optString("api", "openai-completions"),
@@ -196,6 +209,60 @@ class ConfigManager(
 
     fun updateConfig(newConfig: ClawConfig) {
         _config.value = newConfig
+    }
+
+    /**
+     * OpenClaw's gateway schema rejects a `name` key on `models.providers.*`
+     * entries. Older app versions wrote one for every custom provider, which
+     * makes the gateway boot fail with exit code 78 ("Unrecognized key").
+     * Strip that key (backing up the friendly name to the app-private meta
+     * file) and report whether the config needs rewriting.
+     */
+    private fun sanitizeProviderNameKeys(json: JSONObject): Boolean {
+        val providers = json.optJSONObject("models")?.optJSONObject("providers") ?: return false
+        var changed = false
+        val names = loadProviderNames().toMutableMap()
+        val keys = providers.keys()
+        while (keys.hasNext()) {
+            val id = keys.next()
+            if (id in builtInProviderIds) continue
+            val p = providers.optJSONObject(id) ?: continue
+            if (p.has("name")) {
+                val n = p.optString("name", "").trim()
+                if (n.isNotBlank() && n != id) names[id] = n
+                p.remove("name")
+                changed = true
+            }
+        }
+        if (names.isNotEmpty()) saveProviderNames(names)
+        return changed
+    }
+
+    private fun loadProviderNames(): Map<String, String> {
+        return try {
+            if (!providerNamesFile.exists()) emptyMap()
+            else {
+                val obj = JSONObject(providerNamesFile.readText())
+                val result = mutableMapOf<String, String>()
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val id = keys.next()
+                    obj.optString(id, "").takeIf { it.isNotBlank() }?.let { result[id] = it }
+                }
+                result
+            }
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    private fun saveProviderNames(names: Map<String, String>) {
+        try {
+            val obj = JSONObject()
+            names.filterValues { it.isNotBlank() }.forEach { (id, name) -> obj.put(id, name) }
+            providerNamesFile.writeText(obj.toString())
+        } catch (_: Exception) {
+        }
     }
 
     fun isCustomProvider(provider: String): Boolean = _config.value.customAiProviders.any { it.id == provider }
@@ -231,7 +298,6 @@ class ConfigManager(
                 val providerObjects = JSONObject()
                 c.customAiProviders.forEach { custom ->
                     val providerJson = JSONObject()
-                    providerJson.put("name", custom.name)
                     providerJson.put("baseUrl", custom.baseUrl.trim().trimEnd('/'))
                     providerJson.put("api", custom.api)
                     if (custom.apiKey.isNotBlank()) providerJson.put("apiKey", custom.apiKey)
@@ -243,6 +309,10 @@ class ConfigManager(
                     providerObjects.put(custom.id, providerJson)
                 }
                 json.put("models", JSONObject().put("mode", "merge").put("providers", providerObjects))
+                // Friendly provider names can't live in the gateway config (the
+                // schema rejects a name key on provider entries) — keep them in
+                // the app-private meta file instead.
+                saveProviderNames(c.customAiProviders.associate { it.id to it.name })
             }
 
             if (c.aiApiKey.isNotBlank() && !isCustomProvider(c.aiProvider)) {
