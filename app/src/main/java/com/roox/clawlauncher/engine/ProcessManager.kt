@@ -361,6 +361,57 @@ os.networkInterfaces = function() {
     }
     return filtered;
 };
+// ── GEMINI CLI SPAWN REWRITE FOR ANDROID ──────────────────────────────
+// The "google-gemini-cli" provider and media-understanding both run the
+// `gemini` CLI as a subprocess. We install baseDir/bin/gemini as a shell
+// wrapper, but Android refuses to exec shell scripts from app-private
+// storage (spawn gemini EACCES). Rewrite these spawns into a direct
+// `libnode gemini.js <args>` invocation — the same pattern the npm/node
+// launchers already use successfully. This runs under --require, so it is
+// installed before the openclaw bundles capture their child_process
+// references.
+const GEMINI_NODE = ${"\"${nodeBin.absolutePath}\""};
+const GEMINI_BUNDLE = ${"\"${File(baseDir, "node_modules/@google/gemini-cli/bundle/gemini.js").absolutePath}\""};
+const GEMINI_WRAPPER = ${"\"${File(baseDir, "bin/gemini").absolutePath}\""};
+try {
+  if (fs.existsSync(GEMINI_BUNDLE)) {
+    const cp = require('child_process');
+    const isGeminiCmd = function(command) {
+      const name = String(command || '');
+      if (name === 'gemini') return true;
+      if (name === GEMINI_WRAPPER) return true;
+      if (name.indexOf('/') !== -1 || name.indexOf('\\') !== -1) {
+        const base = name.substring(name.lastIndexOf('/') + 1);
+        return base === 'gemini';
+      }
+      return false;
+    };
+    const remap = function(impl) {
+      return function(command, args, options, cb) {
+        if (isGeminiCmd(command)) {
+          let realArgs = args;
+          let realOpts = options;
+          let realCb = cb;
+          if (!Array.isArray(realArgs)) {
+            realCb = typeof realArgs === 'function' ? realArgs : (typeof realOpts === 'function' ? realOpts : realCb);
+            realOpts = realArgs && typeof realArgs === 'object' ? realArgs : (typeof realOpts === 'object' ? realOpts : undefined);
+            realArgs = [];
+          }
+          const full = [GEMINI_BUNDLE].concat(Array.from(realArgs || []));
+          return impl.call(this, GEMINI_NODE, full, realOpts, realCb);
+        }
+        return impl.apply(this, arguments);
+      };
+    };
+    cp.spawn = remap(cp.spawn);
+    cp.spawnSync = remap(cp.spawnSync);
+    cp.execFile = remap(cp.execFile);
+    cp.execFileSync = remap(cp.execFileSync);
+  }
+} catch (e) {
+  console.error('[claw-patch] gemini spawn rewrite failed: ' + e.message);
+}
+// ── END GEMINI SPAWN REWRITE ───────────────────────────────────────────
 process.on('unhandledRejection', (reason, promise) => {
     if (reason && reason.message && reason.message.includes('valid address')) return;
     console.error('Unhandled rejection:', reason);
