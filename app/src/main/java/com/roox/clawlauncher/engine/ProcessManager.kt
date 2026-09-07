@@ -7,9 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
-import com.roox.clawlauncher.auth.GoogleAuthManager
 import com.roox.clawlauncher.service.OpenClawService
 import java.io.BufferedReader
 import java.io.File
@@ -33,8 +31,7 @@ data class ServerStatus(
 
 class ProcessManager(
     private val context: Context,
-    private val configManager: ConfigManager,
-    private val googleAuth: GoogleAuthManager? = null
+    private val configManager: ConfigManager
 ) {
     private val _status = MutableStateFlow(ServerStatus())
     val status: StateFlow<ServerStatus> = _status
@@ -42,7 +39,6 @@ class ProcessManager(
     private var process: Process? = null
     private var startTime: Long = 0L
     private val logBuffer = StringBuilder()
-    @Volatile private var tokenRefreshTimer: Thread? = null
 
     private val baseDir: File get() = File(context.filesDir, "openclaw")
     private val nodeBin: File get() = File(context.applicationInfo.nativeLibraryDir, "libnode.so")
@@ -204,22 +200,6 @@ class ProcessManager(
         logBuffer.clear()
         appendLog("→ Starting OpenClaw gateway...")
 
-        // Google account sign-in: make sure we hold a FRESH access token so the
-        // gateway starts with valid OAuth credentials.
-        if (configManager.config.value.aiProvider == ConfigManager.GOOGLE_CLI_PROVIDER && googleAuth != null) {
-            appendLog("→ Checking Google sign-in token...")
-            val ok = googleAuth.refreshIfNeeded()
-            if (ok) appendLog("✓ Google token valid")
-            else {
-                val err = googleAuth.session.value.lastError
-                if (!googleAuth.session.value.isSignedIn)
-                    appendLog("⚠️ Not signed in to Google — sign in from Settings → AI Model")
-                else if (err != null)
-                    appendLog("⚠️ Token refresh: $err")
-            }
-        }
-
-
         withContext(Dispatchers.IO) {
             try {
                 val env = buildEnv()
@@ -361,57 +341,6 @@ os.networkInterfaces = function() {
     }
     return filtered;
 };
-// ── GEMINI CLI SPAWN REWRITE FOR ANDROID ──────────────────────────────
-// The "google-gemini-cli" provider and media-understanding both run the
-// `gemini` CLI as a subprocess. We install baseDir/bin/gemini as a shell
-// wrapper, but Android refuses to exec shell scripts from app-private
-// storage (spawn gemini EACCES). Rewrite these spawns into a direct
-// `libnode gemini.js <args>` invocation — the same pattern the npm/node
-// launchers already use successfully. This runs under --require, so it is
-// installed before the openclaw bundles capture their child_process
-// references.
-const GEMINI_NODE = ${"\"${nodeBin.absolutePath}\""};
-const GEMINI_BUNDLE = ${"\"${File(baseDir, "node_modules/@google/gemini-cli/bundle/gemini.js").absolutePath}\""};
-const GEMINI_WRAPPER = ${"\"${File(baseDir, "bin/gemini").absolutePath}\""};
-try {
-  if (fs.existsSync(GEMINI_BUNDLE)) {
-    const cp = require('child_process');
-    const isGeminiCmd = function(command) {
-      const name = String(command || '');
-      if (name === 'gemini') return true;
-      if (name === GEMINI_WRAPPER) return true;
-      if (name.indexOf('/') !== -1 || name.indexOf('\\') !== -1) {
-        const base = name.substring(name.lastIndexOf('/') + 1);
-        return base === 'gemini';
-      }
-      return false;
-    };
-    const remap = function(impl) {
-      return function(command, args, options, cb) {
-        if (isGeminiCmd(command)) {
-          let realArgs = args;
-          let realOpts = options;
-          let realCb = cb;
-          if (!Array.isArray(realArgs)) {
-            realCb = typeof realArgs === 'function' ? realArgs : (typeof realOpts === 'function' ? realOpts : realCb);
-            realOpts = realArgs && typeof realArgs === 'object' ? realArgs : (typeof realOpts === 'object' ? realOpts : undefined);
-            realArgs = [];
-          }
-          const full = [GEMINI_BUNDLE].concat(Array.from(realArgs || []));
-          return impl.call(this, GEMINI_NODE, full, realOpts, realCb);
-        }
-        return impl.apply(this, arguments);
-      };
-    };
-    cp.spawn = remap(cp.spawn);
-    cp.spawnSync = remap(cp.spawnSync);
-    cp.execFile = remap(cp.execFile);
-    cp.execFileSync = remap(cp.execFileSync);
-  }
-} catch (e) {
-  console.error('[claw-patch] gemini spawn rewrite failed: ' + e.message);
-}
-// ── END GEMINI SPAWN REWRITE ───────────────────────────────────────────
 process.on('unhandledRejection', (reason, promise) => {
     if (reason && reason.message && reason.message.includes('valid address')) return;
     console.error('Unhandled rejection:', reason);
@@ -527,15 +456,11 @@ process.on('unhandledRejection', (reason, promise) => {
                             }
                         } catch (_: Exception) { }
                         // Process ended
-                        stopTokenRefreshTimer()
                         _status.value = _status.value.copy(
                             state = ServerState.STOPPED,
                             message = "OpenClaw stopped"
                         )
                     }.start()
-
-                    // Keep the Google OAuth token fresh while the server runs
-                    startTokenRefreshTimer(proc)
                 } else {
                     throw Exception("Failed to start within timeout")
                 }
@@ -553,40 +478,9 @@ process.on('unhandledRejection', (reason, promise) => {
         }
     }
 
-    /**
-     * While the gateway runs, refresh the Google OAuth token every 20 minutes so
-     * the on-disk credential files and the auth-profile store stay valid. The
-     * timer stops itself when the process exits.
-     */
-    private fun startTokenRefreshTimer(proc: Process) {
-        stopTokenRefreshTimer()
-        val auth = googleAuth ?: return
-        tokenRefreshTimer = Thread {
-            while (true) {
-                try { Thread.sleep(20 * 60 * 1000L) } catch (_: InterruptedException) { break }
-                if (!proc.isAlive) break
-                try {
-                    if (configManager.config.value.aiProvider == ConfigManager.GOOGLE_CLI_PROVIDER) {
-                        val ok = runBlocking { auth.refreshIfNeeded() }
-                        appendLog(if (ok) "✓ Google token refreshed" else "⚠️ Google token refresh failed: ${auth.session.value.lastError ?: ""}")
-                    }
-                } catch (_: Exception) { }
-            }
-        }.also {
-            it.isDaemon = true
-            it.start()
-        }
-    }
-
-    private fun stopTokenRefreshTimer() {
-        tokenRefreshTimer?.interrupt()
-        tokenRefreshTimer = null
-    }
-
     suspend fun stop() {
         _status.value = _status.value.copy(state = ServerState.STOPPING, message = "Stopping...")
         appendLog("→ Stopping OpenClaw...")
-        stopTokenRefreshTimer()
         context.getSharedPreferences("claw_prefs", Context.MODE_PRIVATE)
             .edit().putBoolean("was_running", false).apply()
 

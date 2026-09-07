@@ -250,57 +250,6 @@ os.networkInterfaces = function() {
     }
     return filtered;
 };
-// ── GEMINI CLI SPAWN REWRITE FOR ANDROID ──────────────────────────────
-// The "google-gemini-cli" provider and media-understanding both run the
-// `gemini` CLI as a subprocess. We install baseDir/bin/gemini as a shell
-// wrapper, but Android refuses to exec shell scripts from app-private
-// storage (spawn gemini EACCES). Rewrite these spawns into a direct
-// `libnode gemini.js <args>` invocation — the same pattern the npm/node
-// launchers already use successfully. This runs under --require, so it is
-// installed before the openclaw bundles capture their child_process
-// references.
-const GEMINI_NODE = ${"\"${nodeBin.absolutePath}\""};
-const GEMINI_BUNDLE = ${"\"${File(baseDir, "node_modules/@google/gemini-cli/bundle/gemini.js").absolutePath}\""};
-const GEMINI_WRAPPER = ${"\"${File(baseDir, "bin/gemini").absolutePath}\""};
-try {
-  if (fs.existsSync(GEMINI_BUNDLE)) {
-    const cp = require('child_process');
-    const isGeminiCmd = function(command) {
-      const name = String(command || '');
-      if (name === 'gemini') return true;
-      if (name === GEMINI_WRAPPER) return true;
-      if (name.indexOf('/') !== -1 || name.indexOf('\\') !== -1) {
-        const base = name.substring(name.lastIndexOf('/') + 1);
-        return base === 'gemini';
-      }
-      return false;
-    };
-    const remap = function(impl) {
-      return function(command, args, options, cb) {
-        if (isGeminiCmd(command)) {
-          let realArgs = args;
-          let realOpts = options;
-          let realCb = cb;
-          if (!Array.isArray(realArgs)) {
-            realCb = typeof realArgs === 'function' ? realArgs : (typeof realOpts === 'function' ? realOpts : realCb);
-            realOpts = realArgs && typeof realArgs === 'object' ? realArgs : (typeof realOpts === 'object' ? realOpts : undefined);
-            realArgs = [];
-          }
-          const full = [GEMINI_BUNDLE].concat(Array.from(realArgs || []));
-          return impl.call(this, GEMINI_NODE, full, realOpts, realCb);
-        }
-        return impl.apply(this, arguments);
-      };
-    };
-    cp.spawn = remap(cp.spawn);
-    cp.spawnSync = remap(cp.spawnSync);
-    cp.execFile = remap(cp.execFile);
-    cp.execFileSync = remap(cp.execFileSync);
-  }
-} catch (e) {
-  console.error('[claw-patch] gemini spawn rewrite failed: ' + e.message);
-}
-// ── END GEMINI SPAWN REWRITE ───────────────────────────────────────────
 process.on('unhandledRejection', (reason, promise) => {
     if (reason && reason.message && reason.message.includes('valid address')) return;
     console.error('Unhandled rejection:', reason);
@@ -490,11 +439,6 @@ process.on('unhandledRejection', (reason, promise) => {
                     log("✓ OpenClaw already installed: ${getOpenclawMainPath()}")
                 }
 
-                // Step 3.5: Gemini CLI (required by OpenClaw's google-gemini-cli
-                // provider — without the "gemini" binary the gateway fails with
-                // "spawn gemini ENOENT"). Non-fatal: other providers still work.
-                installGeminiCli()
-
                 // Step 4: Config + Workspace
                 _progress.value = _progress.value.copy(step = "Finalizing...", progress = 0.92f, npmLine = "")
 
@@ -576,7 +520,6 @@ process.on('unhandledRejection', (reason, promise) => {
                 if (exit != 0) throw Exception("Update failed (exit: $exit)")
                 val entry = findOpenclawEntry()
                 if (entry != null) saveOpenclawPath(entry.absolutePath)
-                installGeminiCli()
                 val installed = getOpenClawVersion()
                 _updateInfo.value = _updateInfo.value.copy(
                     installedVersion = installed,
@@ -595,52 +538,6 @@ process.on('unhandledRejection', (reason, promise) => {
                 log("❌ ${e.message}")
                 _progress.value = _progress.value.copy(isRunning = false, error = e.message)
             }
-        }
-    }
-
-    /**
-     * Install (or refresh) @google/gemini-cli so OpenClaw's "google-gemini-cli"
-     * provider can spawn the `gemini` CLI. OpenClaw runs it as a subprocess; if the
-     * binary is missing the gateway fails with `spawn gemini ENOENT`. npm with
-     * --prefix baseDir drops the binary at baseDir/bin/gemini, which is already on
-     * the gateway PATH. Never fatal — other AI providers keep working without it.
-     */
-    private fun installGeminiCli() {
-        try {
-            if (!isNpmInstalled) {
-                log("⚠ Gemini CLI skipped (npm not installed)")
-                return
-            }
-            val binDir = File(baseDir, "bin")
-            binDir.mkdirs()
-            val geminiBin = File(binDir, "gemini")
-            if (geminiBin.exists()) {
-                log("✓ Gemini CLI ready: ${geminiBin.absolutePath}")
-                return
-            }
-            log("→ Installing Gemini CLI (@google/gemini-cli) for Google sign-in...")
-            val env = buildEnv()
-            runCmdOutput(
-                env, nodeBin.absolutePath, npmCli.absolutePath,
-                "install", "@google/gemini-cli",
-                "--prefix", baseDir.absolutePath,
-                "--no-audit", "--no-fund", "--ignore-scripts", "--force"
-            )
-            // Locate the bundle. `npm install --prefix` drops the package at
-            // <prefix>/node_modules/@google/gemini-cli/bundle/gemini.js and only
-            // creates a node_modules/.bin link (whose "#!/usr/bin/env node"
-            // shebang can't resolve on Android). Create a bin wrapper pointing at
-            // the bundled node, exactly like the existing "npm" wrapper.
-            val bundle = File(baseDir, "node_modules/@google/gemini-cli/bundle/gemini.js")
-            if (!bundle.exists()) {
-                log("⚠ Gemini CLI install did not produce a bundle")
-                return
-            }
-            geminiBin.writeText("#!/system/bin/sh\nexec \"${nodeBin.absolutePath}\" \"${bundle.absolutePath}\" \"$@\"\n")
-            geminiBin.setExecutable(true, false)
-            log("✓ Gemini CLI ready: ${geminiBin.absolutePath}")
-        } catch (e: Exception) {
-            log("⚠ Gemini CLI install failed (non-fatal): ${e.message}")
         }
     }
 

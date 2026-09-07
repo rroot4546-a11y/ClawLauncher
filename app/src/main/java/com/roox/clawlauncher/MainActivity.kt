@@ -15,7 +15,6 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.lifecycleScope
 import com.roox.clawlauncher.ads.AdBanner
 import com.roox.clawlauncher.ads.AdManager
-import com.roox.clawlauncher.auth.GoogleAuthManager
 import com.roox.clawlauncher.engine.AuthStoreManager
 import com.roox.clawlauncher.engine.BackupManager
 import com.roox.clawlauncher.engine.BootstrapManager
@@ -35,15 +34,13 @@ class MainActivity : ComponentActivity() {
     private lateinit var bootstrapManager: BootstrapManager
     private lateinit var backupManager: BackupManager
     private lateinit var authStore: AuthStoreManager
-    private lateinit var googleAuth: GoogleAuthManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         authStore = AuthStoreManager(this)
         configManager = ConfigManager(this, authStore)
-        googleAuth = GoogleAuthManager(this, authStore)
-        processManager = ProcessManager(this, configManager, googleAuth)
+        processManager = ProcessManager(this, configManager)
         bootstrapManager = BootstrapManager(this)
         backupManager = BackupManager(this)
 
@@ -196,8 +193,6 @@ class MainActivity : ComponentActivity() {
             )
             "settings" -> SettingsScreen(
                 configManager = configManager,
-                googleAuth = googleAuth,
-                processManager = processManager,
                 onBack = { currentScreen = "main" },
                 onSave = {
                     lifecycleScope.launch {

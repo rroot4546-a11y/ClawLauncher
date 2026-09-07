@@ -19,13 +19,10 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.roox.clawlauncher.auth.GoogleAuthManager
 import com.roox.clawlauncher.engine.ClawConfig
 import com.roox.clawlauncher.engine.ConfigManager
 import com.roox.clawlauncher.engine.CurlProviderParser
 import com.roox.clawlauncher.engine.CustomAiProvider
-import com.roox.clawlauncher.engine.ProcessManager
-import com.roox.clawlauncher.engine.ServerState
 import com.roox.clawlauncher.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -39,8 +36,6 @@ import java.util.concurrent.TimeUnit
 @Composable
 fun SettingsScreen(
     configManager: ConfigManager,
-    googleAuth: GoogleAuthManager,
-    processManager: ProcessManager? = null,
     onBack: () -> Unit,
     onSave: () -> Unit
 ) {
@@ -57,7 +52,7 @@ fun SettingsScreen(
         mutableStateOf(config.telegramAllowedUsers.joinToString(", "))
     }
 
-    val builtInProviders = remember { listOf("openrouter", "google", "openai", "anthropic", ConfigManager.GOOGLE_CLI_PROVIDER) }
+    val builtInProviders = remember { listOf("openrouter", "google", "openai", "anthropic") }
     val providers = builtInProviders + localConfig.customAiProviders.map { it.id }
     val popularPresets = remember { configManager.getPopularProviderPresets() }
 
@@ -400,8 +395,6 @@ fun SettingsScreen(
                                     aiProvider = provider,
                                     aiApiKey = when {
                                         custom != null -> custom.apiKey
-                                        // Google account sign-in needs NO API key — clear stale keys
-                                        provider == ConfigManager.GOOGLE_CLI_PROVIDER -> ""
                                         else -> localConfig.aiApiKey
                                     },
                                     aiModel = firstModel
@@ -414,36 +407,6 @@ fun SettingsScreen(
             }
 
             Spacer(modifier = Modifier.height(12.dp))
-
-            if (!needsApiKey) {
-                GoogleAccountCard(
-                    googleAuth = googleAuth,
-                    onSignedIn = {
-                        // Sign-in means "use Gemini NOW": force-select the provider
-                        // + a free-tier model (unconditionally — not only when the
-                        // previous model was blank/foreign), clear any stale API key,
-                        // persist immediately, and hot-restart the running gateway
-                        // so OpenClaw switches to the Google login with zero taps.
-                        val googleModels = configManager.getAvailableModels()[ConfigManager.GOOGLE_CLI_PROVIDER].orEmpty()
-                        val keepModel = googleModels.any { it.first == localConfig.aiModel }
-                        localConfig = localConfig.copy(
-                            aiProvider = ConfigManager.GOOGLE_CLI_PROVIDER,
-                            aiModel = if (keepModel) localConfig.aiModel else "gemini-3-flash-preview",
-                            aiApiKey = ""
-                        )
-                        configManager.updateConfig(localConfig)
-                        processManager?.let { pm ->
-                            scope.launch {
-                                configManager.saveConfig()
-                                if (pm.status.value.state == ServerState.RUNNING) {
-                                    pm.restart()
-                                }
-                            }
-                        }
-                    }
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-            }
 
             if (needsApiKey) {
                 OutlinedTextField(
@@ -888,149 +851,6 @@ fun SettingsScreen(
                 )
             }
             Spacer(modifier = Modifier.height(24.dp))
-        }
-    }
-}
-
-@Composable
-fun GoogleAccountCard(
-    googleAuth: GoogleAuthManager,
-    onSignedIn: () -> Unit
-) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val session by googleAuth.session.collectAsState()
-    var pastedCode by remember { mutableStateOf("") }
-    var showCodeField by remember { mutableStateOf(false) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(ClawCardBg, RoundedCornerShape(14.dp))
-            .padding(14.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.AccountCircle, contentDescription = null, tint = ClawBlue, modifier = Modifier.size(22.dp))
-            Spacer(modifier = Modifier.width(10.dp))
-            Column {
-                Text("Google Account Sign-in", color = ClawTextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                Text("Use Gemini without an API key (same sign-in as Gemini CLI)", fontSize = 11.sp, color = ClawTextSecondary)
-            }
-        }
-        Spacer(modifier = Modifier.height(12.dp))
-
-        if (session.isSignedIn) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = ClawGreen, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Column {
-                    Text(session.email.ifBlank { "Signed in" }, color = ClawGreen, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                    val minsLeft = session.millisLeft / 60000
-                    Text(
-                        if (minsLeft > 0) "Token valid for ~${minsLeft} min (auto-refreshes)"
-                        else "Token expired — press Refresh",
-                        fontSize = 11.sp, color = ClawTextSecondary
-                    )
-                }
-            }
-            session.quotaSummary?.let {
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(it, fontSize = 12.sp, color = ClawTextSecondary)
-            }
-            session.lastError?.let {
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(it, fontSize = 12.sp, color = ClawRed)
-            }
-            Spacer(modifier = Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = { scope.launch { googleAuth.refreshIfNeeded(force = true) } },
-                    enabled = !session.isRefreshing,
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(if (session.isRefreshing) "Refreshing..." else "Refresh", fontSize = 12.sp)
-                }
-                OutlinedButton(
-                    onClick = { scope.launch { googleAuth.checkQuota() } },
-                    enabled = !session.checkingQuota,
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Icon(Icons.Default.Speed, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(if (session.checkingQuota) "Checking..." else "Test", fontSize = 12.sp)
-                }
-                OutlinedButton(
-                    onClick = { scope.launch { googleAuth.signOut() } },
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = ClawRed)
-                ) {
-                    Icon(Icons.Default.Logout, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Sign out", fontSize = 12.sp)
-                }
-            }
-        } else {
-            Text(
-                "1) Press the button — the browser opens Google's sign-in page.\n" +
-                    "2) Approve access (code shown on a Google page).\n" +
-                    "3) Paste that code below.",
-                fontSize = 11.sp, color = ClawTextSecondary, lineHeight = 16.sp
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            Button(
-                onClick = {
-                    try {
-                        val url = googleAuth.startSignIn()
-                        showCodeField = true
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                    } catch (_: Exception) {
-                        showCodeField = true
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = ClawBlue)
-            ) {
-                Icon(Icons.Default.Login, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Sign in with Google")
-            }
-            if (showCodeField) {
-                Spacer(modifier = Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = pastedCode,
-                    onValueChange = { pastedCode = it },
-                    label = { Text("Paste the authorization code", color = ClawTextSecondary) },
-                    placeholder = { Text("4/1Af... code from Google page", color = ClawTextSecondary.copy(alpha = 0.3f)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Button(
-                    onClick = {
-                        scope.launch {
-                            val ok = googleAuth.completeSignIn(pastedCode)
-                            if (ok) {
-                                pastedCode = ""
-                                showCodeField = false
-                                onSignedIn()
-                            }
-                        }
-                    },
-                    enabled = pastedCode.isNotBlank() && !session.isRefreshing,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = ClawGreen)
-                ) {
-                    Text(if (session.isRefreshing) "Signing in..." else "Complete sign-in")
-                }
-            }
-            session.lastError?.let {
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(it, fontSize = 12.sp, color = ClawRed)
-            }
         }
     }
 }
