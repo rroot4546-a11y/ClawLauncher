@@ -232,7 +232,16 @@ os.tmpdir = function() { return tmpDir; };
 if (typeof os.tmpDir === 'function') os.tmpDir = function() { return tmpDir; };
 const origNetworkInterfaces = os.networkInterfaces;
 os.networkInterfaces = function() {
-    const ifaces = origNetworkInterfaces.call(this);
+    let ifaces;
+    try {
+        // On Android, networkInterfaces() can throw EACCES (error 13)
+        ifaces = origNetworkInterfaces.call(this);
+    } catch (e) {
+        ifaces = null;
+    }
+    if (!ifaces || typeof ifaces !== 'object') {
+        return { lo: [{ address: '127.0.0.1', netmask: '255.0.0.0', family: 'IPv4', mac: '00:00:00:00:00:00', internal: true, cidr: '127.0.0.1/8' }] };
+    }
     const filtered = {};
     for (const [name, addrs] of Object.entries(ifaces)) {
         if (name.startsWith('rmnet') || name.startsWith('dummy') || name.startsWith('v4-')) continue;
