@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -107,8 +108,9 @@ fun FileManagerScreen(
                 initialText = editorText,
                 onBack = { editorTarget = null; files = listFiles(currentDir) },
                 onSave = { newText ->
-                    val ok = try { editorTarget!!.writeText(newText); true } catch (e: Exception) { false }
-                    toastMsg = if (ok) "Saved ✓" else "Save failed: ${e.message}"
+                    var errMsg: String? = null
+                    val ok = try { editorTarget!!.writeText(newText); true } catch (e: Exception) { errMsg = e.message; false }
+                    toastMsg = if (ok) "Saved ✓" else "Save failed: $errMsg"
                     editorTarget = null
                     files = listFiles(currentDir)
                 }
@@ -148,8 +150,9 @@ fun FileManagerScreen(
                 TextButton(onClick = {
                     val n = name.trim()
                     if (n.isNotEmpty() && n.none { it == '/' || it == '\\' }) {
-                        val ok = try { File(currentDir, n).apply { writeText("") }; true } catch (e: Exception) { false }
-                        toastMsg = if (ok) "$n created" else "Create failed: ${e.message}"
+                        var errMsg: String? = null
+                        val ok = try { File(currentDir, n).apply { writeText("") }; true } catch (e: Exception) { errMsg = e.message; false }
+                        toastMsg = if (ok) "$n created" else "Create failed: $errMsg"
                         files = listFiles(currentDir)
                     }
                     newFileName = null
@@ -210,8 +213,9 @@ fun FileManagerScreen(
             confirmButton = {
                 TextButton(onClick = {
                     if (name.trim().isNotEmpty()) {
-                        val ok = try { target.renameTo(File(target.parent, name.trim())); true } catch (e: Exception) { false }
-                        toastMsg = if (ok) "Renamed ✓" else "Rename failed: ${e.message}"
+                        var errMsg: String? = null
+                        val ok = try { target.renameTo(File(target.parent, name.trim())); true } catch (e: Exception) { errMsg = e.message; false }
+                        toastMsg = if (ok) "Renamed ✓" else "Rename failed: $errMsg"
                         files = listFiles(currentDir)
                     }
                     renameTarget = null
@@ -232,8 +236,9 @@ fun FileManagerScreen(
             text = { Text("Delete ${target.name} permanently?", color = ClawTextSecondary) },
             confirmButton = {
                 TextButton(onClick = {
-                    val ok = try { target.deleteRecursively(); true } catch (e: Exception) { false }
-                    toastMsg = if (ok) "Deleted ✓" else "Delete failed: ${e.message}"
+                    var errMsg: String? = null
+                    val ok = try { target.deleteRecursively(); true } catch (e: Exception) { errMsg = e.message; false }
+                    toastMsg = if (ok) "Deleted ✓" else "Delete failed: $errMsg"
                     confirmDeleteTarget = null
                     files = listFiles(currentDir)
                 }) { Text("Delete", color = ClawRed) }
